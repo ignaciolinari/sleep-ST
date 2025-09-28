@@ -9,10 +9,16 @@ Clasificar estadios de sueño a partir de EEG, EOG y EMG usando modelos de Machi
 - `src/`: código de descarga, preprocesamiento, extracción de características y modelos.
 
 ## Entorno
-Crear el entorno conda:
+Entorno base:
 ```bash
 conda env create -f environment.yml
-conda activate sleep-edf
+conda activate sleep-st
+```
+
+Herramientas de desarrollo:
+```bash
+conda env update -n sleep-st -f environment.dev.yml
+pre-commit install
 ```
 
 ## Descargar dataset
@@ -21,3 +27,4 @@ conda activate sleep-edf
 3. Descargar datos:
    ```bash
    wget -r -N -c -np https://physionet.org/files/sleep-edfx/1.0.0/
+   ```
