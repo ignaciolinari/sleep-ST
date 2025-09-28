@@ -1,0 +1,52 @@
+###########################################################
+# Archivos de datos (no subir dataset Sleep-EDF)
+data/
+*.edf
+*.hyp
+*.npy
+*.npz
+*.mat
+*.csv
+*.tsv
+
+# Archivos temporales de Jupyter
+.ipynb_checkpoints/
+*.ipynb~
+
+# Archivos de entorno conda/virtualenv
+env/
+venv/
+*.env
+*.venv
+*.conda
+*.yml
+
+# Archivos de Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.dll
+
+# Archivos de logs y debug
+*.log
+*.out
+*.err
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+
+# Archivos de IDE
+.vscode/
+.idea/
+*.iml
+
+# Archivos de compilación/outputs
+*.egg-info/
+dist/
+build/
+
+# Configuración personal
+*.json
