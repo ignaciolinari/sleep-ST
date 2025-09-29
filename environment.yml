@@ -1,0 +1,24 @@
+name: sleep-st
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  # Core scientific stack
+  - numpy
+  - scipy
+  - pandas
+  - scikit-learn
+  # EEG / PhysioNet
+  - mne-base
+  - wfdb
+  # Viz and utils
+  - matplotlib
+  - seaborn
+  - tqdm
+  - requests
+  - pyyaml
+  # Notebooks
+  - ipykernel
+  - jupyterlab
+  # CLI utils
+  - wget

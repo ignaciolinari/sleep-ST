@@ -1,0 +1,45 @@
+# Pre-commit configuration for sleep-ST
+# Runs basic hygiene + Python formatting/lint + notebook checks
+# Docs: https://pre-commit.com/
+
+# Exclude large data and cache folders
+exclude: |
+  ^(data/|tmp/|.venv/|.mypy_cache/|.pytest_cache/|.ruff_cache/|.git/)
+
+repos:
+  # Generic file checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+      - id: detect-private-key
+
+  # Ruff for Python linting/formatting (fast)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
+  # Black (optional if you prefer Black's style; can be redundant with ruff-format)
+  - repo: https://github.com/psf/black
+    rev: 24.8.0
+    hooks:
+      - id: black
+        language_version: python3
+
+  # nbQA to run tools on Jupyter Notebooks
+  - repo: https://github.com/nbQA-dev/nbQA
+    rev: 1.9.0
+    hooks:
+      - id: nbqa-ruff
+        additional_dependencies: ["ruff==0.6.9"]
+        args: ["--fix"]
+      - id: nbqa-black
+        additional_dependencies: ["black==24.8.0"]

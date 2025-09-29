@@ -8,6 +8,12 @@ data/
 *.mat
 *.csv
 *.tsv
+out/
+tmp/
+*.png
+*.jpg
+*.jpeg
+*.svg
 
 # Archivos temporales de Jupyter
 .ipynb_checkpoints/
@@ -19,7 +25,6 @@ venv/
 *.env
 *.venv
 *.conda
-*.yml
 
 # Archivos de Python
 __pycache__/
@@ -33,6 +38,7 @@ __pycache__/
 *.log
 *.out
 *.err
+wget-log*
 
 # Archivos de sistema
 .DS_Store
