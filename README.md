@@ -90,6 +90,21 @@ Opción B) `wget` directo
 wget -r -N -c -np -e robots=off -P data/raw https://physionet.org/files/sleep-edfx/1.0.0/sleep-cassette/
 ```
 
+## Convención de nombres en Sleep-EDF
+Los archivos de *Sleep Cassette* siguen un esquema estable que conviene conocer al trabajar con el `manifest` o al descargar manualmente desde PhysioNet:
+
+- **PSG**: `SC4ssNL0-PSG.edf`
+   - `SC` → Sleep Cassette.
+   - `4` → constante del estudio.
+   - `ss` → número de sujeto (dos dígitos, p. ej. `00` = primer sujeto).
+   - `N` → noche del registro (`1` o `2`).
+   - `L` → letra que aparece en el nombre del PSG: puede ser `E`, `F` o `G` según el lote/serie del estudio.
+   - `0` → dígito cero fijo para PSG.
+- **Hipnogramas**: `SC4ssNLX-Hypnogram.edf`
+   - El prefijo `SC4ssNL` coincide exactamente con el PSG asociado (mismo sujeto y misma noche).
+   - `X` → letra del técnico que puntuó el hipnograma (p. ej. `C`, `M`, `P`, `V`, `Y`, `J`, `A`, `W`, etc.).
+
+
 ## Manifest y validación de sesiones
 Luego de descargar, podés generar un manifiesto con las sesiones disponibles y el estado de cada par PSG + Hypnograma.
 
