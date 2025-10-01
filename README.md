@@ -1,4 +1,4 @@
-# Sleep Classification Project
+# Clasificación de fases de sueño
 
 ## Objetivo
 Clasificar estadios de sueño a partir de EEG, EOG y EMG usando modelos de Machine Learning y Deep Learning.
@@ -16,7 +16,8 @@ Clasificar estadios de sueño a partir de EEG, EOG y EMG usando modelos de Machi
    - `01_raw_exploration.ipynb`
    - `02_processed_exploration.ipynb`
 - `src/`: código fuente
-   - `download.py`: descarga Sleep-EDF (wget / wfdb)
+   - `check_data.py`: automatiza QA (hashes, metadata y artefactos procesados)
+   - `download.py`: descarga Sleep-EDF (wget / wfdb) y dispara QA post-descarga
    - `manifest.py`: genera `data/processed/manifest.csv`
    - `preprocessing.py`: recorte alrededor del periodo de sueño (genera `.fif` y CSV)
    - `view_subject.py`: visualización rápida de señales
@@ -24,10 +25,9 @@ Clasificar estadios de sueño a partir de EEG, EOG y EMG usando modelos de Machi
    - `models.py`: modelos ML/DL
    - `__init__.py`
 - `out/`: salidas generadas (gráficos/exports) por scripts de ejemplo (no versionados en GitHub)
-- `tmp/`: archivos temporales (no versionados en GitHub)
+- `tmp/`: archivos temporales y reportes de QA (p. ej. hashes calculados) (no versionados en GitHub)
 - `environment.yml`: entorno base
 - `README.md`, `LICENSE`
-- `wget-log*`: logs de descargas (si usaste wget)
 
 ## Quickstart
 1) Crear entorno
@@ -37,7 +37,7 @@ conda activate sleep-st
 ```
 2) Descargar datos (ej. subset sleep-cassette)
 ```bash
-python src/download.py --method wget --subset sleep-cassette --out data/raw
+python src/download.py --method wget --subset sleep-cassette --out data/raw --clean
 ```
 3) Generar manifest
 ```bash
@@ -74,18 +74,61 @@ conda activate sleep-st
 python src/download.py --method wget --subset sleep-cassette --out data/raw --dry-run
 
 # Descargar subset "sleep-cassette" con wget
-python src/download.py --method wget --subset sleep-cassette --out data/raw
+python src/download.py --method wget --subset sleep-cassette --out data/raw --clean
 
 # O descargar base completa con wfdb (sin filtrar subset)
-python src/download.py --method wfdb --out data/raw
+python src/download.py --method wfdb --out data/raw --clean
 ```
 
 Notas:
 - Si PhysioNet pide login, exporta variables de entorno o usa flags:
    - `export PHYSIONET_USERNAME=tu_usuario`
    - `export PHYSIONET_PASSWORD=tu_password` (o deja que el script lo pregunte)
+- Si la validación falla por archivos faltantes o hashes incorrectos, corré `python src/download.py ... --clean` para empezar de cero y volvé a ejecutar la descarga; luego revalidá con `python -m src.check_data`.
 
-Opción B) `wget` directo
+### Limpieza y validación automática
+
+El script de descarga ahora puede preparar el entorno antes de bajar archivos y ejecutar checks de calidad al finalizar:
+
+- `--clean`: borra el espejo previo de `data/raw`, los artefactos procesados (`data/processed`) y los `wget-log*` asociados para evitar mezclar descargas viejas con la corrientes. Úsalo cuando quieras partir de cero.
+- `--processed-root`: ajusta la carpeta donde se esperan salidas procesadas (por defecto `data/processed`). Sirve si trabajás con otra ruta en equipos compartidos.
+- `--skip-validation`: salta los chequeos automáticos post-descarga. Por defecto se ejecutan para confirmar hashes y que existan los artefactos principales.
+- `--qa-report`: guarda el reporte de hashes calculados en la ruta que indiques (ej. `--qa-report tmp/raw_sha256_report.csv`).
+- `--strict-validation`: marca como error cualquier hallazgo del QA (por defecto solo se registran las advertencias).
+
+Los checks post-descarga reutilizan el módulo `src.check_data`. Si ocurre un corte en la conexión y faltan archivos, la validación lo reportará de inmediato.
+
+### QA manual de datos
+
+También podés ejecutar la verificación de manera independiente (por ejemplo, luego de reanudar una descarga manual):
+
+```bash
+python -m src.check_data \
+   --raw-root data/raw \
+   --processed-root data/processed \
+   --version 1.0.0 \
+   --subset sleep-cassette \
+   --report tmp/raw_sha256_report.csv
+```
+
+Qué hace:
+
+- Convierte la planilla `SC-subjects.xls` incluida en PhysioNet para confirmar que todos los sujetos están presentes.
+- Calcula hashes SHA-256 de cada EDF y los compara con `SHA256SUMS.txt` (crea el CSV indicado en `--report`).
+- Valida que existan los artefactos procesados claves (`manifest.csv`, recortes si corresponde).
+
+Flags útiles:
+
+- `--strict`: convierte cualquier advertencia en error (salida con código distinto de cero).
+- `--qa-report`: opcional; permite guardar el informe de hashes en un sitio distinto o desactivarlo si no se especifica.
+
+Interpretación:
+
+- Salida `OK`: todos los checks pasaron y el código termina con `0`.
+- Advertencias (`WARNING`): archivos faltantes o metadatos que se pueden regenerar; revisá según el mensaje.
+- Errores (`ERROR`): hashes que no coinciden, archivos críticos faltantes o problemas al leer EDF. Rehacé la descarga con `--clean` y reintentá.
+
+Opción B) `wget` directo *(requiere checks manuales y es proclive a errores)*
 ```bash
 wget -r -N -c -np -e robots=off -P data/raw https://physionet.org/files/sleep-edfx/1.0.0/sleep-cassette/
 ```

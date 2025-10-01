@@ -28,7 +28,47 @@ import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 from typing import Optional
+
+
+def clean_previous_data(raw_root: str, processed_root: str, version: str) -> None:
+    """Remove prior raw dataset, processed outputs and download logs."""
+
+    raw_path = Path(raw_root)
+    sleep_root = raw_path / "physionet.org" / "files" / "sleep-edfx"
+    version_root = sleep_root / version
+    if version_root.exists():
+        shutil.rmtree(version_root)
+        print(f"Eliminado directorio de versión raw: {version_root}")
+    elif sleep_root.exists():
+        shutil.rmtree(sleep_root)
+        print(f"Eliminado árbol de datos raw: {sleep_root}")
+
+    processed_path = Path(processed_root)
+    if processed_path.exists():
+        shutil.rmtree(processed_path)
+        print(f"Eliminado directorio procesado: {processed_path}")
+
+    qa_report = Path("tmp/raw_sha256_report.csv")
+    if qa_report.exists():
+        qa_report.unlink()
+        print(f"Eliminado reporte previo: {qa_report}")
+
+    for log_path in Path(".").glob("wget-log*"):
+        if log_path.is_file():
+            log_path.unlink()
+            print(f"Eliminado log: {log_path}")
+
+
+def _load_check_data_module():
+    """Importar el módulo de QA sin importar el modo de ejecución."""
+
+    try:  # Ejecutando como paquete (python -m src.download)
+        from . import check_data as qa_module  # type: ignore
+    except ImportError:  # Ejecutando como script (python src/download.py)
+        import check_data as qa_module  # type: ignore
+    return qa_module
 
 
 def build_wget_command(
@@ -165,6 +205,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Directorio de salida donde se guardarán los archivos",
     )
     parser.add_argument(
+        "--processed-root",
+        default="data/processed",
+        help="Directorio donde se ubican los artefactos procesados (para limpieza/QA)",
+    )
+    parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="Eliminar datos previos (raw, procesados y logs) antes de descargar",
+    )
+    parser.add_argument(
         "--username",
         default=os.environ.get("PHYSIONET_USERNAME"),
         help="Usuario de PhysioNet (si es necesario). También puedes setear PHYSIONET_USERNAME",
@@ -179,8 +229,27 @@ def main(argv: Optional[list[str]] = None) -> int:
         action="store_true",
         help="No descarga, sólo muestra lo que haría",
     )
+    parser.add_argument(
+        "--skip-validation",
+        action="store_true",
+        help="Omitir chequeo de QA post-descarga",
+    )
+    parser.add_argument(
+        "--qa-report",
+        default="tmp/raw_sha256_report.csv",
+        help="Ruta del CSV de reporte QA (se recrea en cada ejecución)",
+    )
+    parser.add_argument(
+        "--strict-validation",
+        action="store_true",
+        help="Tratar warnings de QA como errores (exit code != 0)",
+    )
 
     args = parser.parse_args(argv)
+
+    if args.clean and not args.dry_run:
+        print("Limpiando datos previos antes de la descarga...")
+        clean_previous_data(args.out, args.processed_root, args.version)
 
     # Normalizar password
     password = args.password or os.environ.get("PHYSIONET_PASSWORD")
@@ -195,7 +264,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.method == "wget":
         url_info = f"subset={args.subset}, version={args.version}"
         print(f"Método: wget | {url_info}")
-        return run_wget(
+        exit_code = run_wget(
             subset=args.subset,
             version=args.version,
             out_dir=args.out,
@@ -209,7 +278,37 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(
                 "Aviso: --subset no aplica con wfdb; usa --method wget si necesitas filtrar."
             )
-        return run_wfdb(out_dir=args.out, dry_run=args.dry_run)
+        exit_code = run_wfdb(out_dir=args.out, dry_run=args.dry_run)
+
+    if exit_code != 0 or args.dry_run:
+        return exit_code
+
+    if args.skip_validation:
+        print("Chequeo de QA omitido (--skip-validation).")
+        return exit_code
+
+    qa_module = _load_check_data_module()
+    qa_result = qa_module.run_checks(
+        raw_root=Path(args.out),
+        processed_root=Path(args.processed_root),
+        version=args.version,
+        report_path=Path(args.qa_report),
+        strict=args.strict_validation,
+    )
+
+    for info in qa_result.infos:
+        print(f"INFO: {info}")
+    for warning in qa_result.warnings:
+        print(f"WARNING: {warning}")
+    for error in qa_result.errors:
+        print(f"ERROR: {error}")
+
+    qa_exit = qa_result.exit_code(strict=args.strict_validation)
+    if qa_exit == 0:
+        print("Validación post-descarga OK.")
+    else:
+        print("Validación post-descarga con errores.", file=sys.stderr)
+    return qa_exit
 
 
 if __name__ == "__main__":
