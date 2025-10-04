@@ -11,7 +11,8 @@ Uso típico:
 		--manifest data/processed/manifest.csv \
 		--out-root data/processed/sleep_trimmed \
 		--out-manifest data/processed/manifest_trimmed.csv \
-		--pre-padding 3600 --post-padding 3600
+		--pre-padding 900 --post-padding 900 \
+		--episode-strategy all --wake-gap-min 60 --min-episode-min 20
 
 Esto producirá:
   • Archivos PSG recortados en ``<out-root>/psg`` en formato FIF.
@@ -19,7 +20,9 @@ Esto producirá:
   • Un nuevo manifest con metadatos sobre el recorte.
 
 Se puede limitar la cantidad de sesiones a procesar con ``--limit`` para
-pruebas rápidas.
+pruebas rápidas. Las opciones ``--episode-strategy``, ``--wake-gap-min`` y
+``--min-episode-min`` permiten controlar cómo segmentar episodios cuando no hay
+anotaciones de ``Lights Off``/``Lights On``.
 """
 
 from __future__ import annotations
@@ -61,6 +64,10 @@ class TrimResult:
     trim_duration_sec: Optional[float]
     padding_pre_sec: float
     padding_post_sec: float
+    sleep_duration_sec: Optional[float] = None
+    episode_index: Optional[int] = None
+    episodes_total: Optional[int] = None
+    episode_strategy: Optional[str] = None
     notes: Optional[str] = None
 
 
@@ -68,21 +75,41 @@ def _canonical_stage(description: str) -> Optional[str]:
     return STAGE_CANONICAL.get(description)
 
 
-def _compute_trim_bounds(
-    annotations: mne.Annotations, padding_pre: float, padding_post: float
-) -> Optional[tuple[float, float]]:
-    timeline = []
+def _build_timeline(
+    annotations: mne.Annotations,
+) -> list[tuple[float, float, Optional[str]]]:
+    timeline: list[tuple[float, float, Optional[str]]] = []
     for onset, duration, desc in zip(
         annotations.onset, annotations.duration, annotations.description
     ):
         canonical = _canonical_stage(desc)
         timeline.append((float(onset), float(duration), canonical))
+    return timeline
 
-    sleep_indices = [
+
+def _total_recording_duration(
+    timeline: list[tuple[float, float, Optional[str]]],
+) -> float:
+    if not timeline:
+        return 0.0
+    onset, duration, _ = timeline[-1]
+    return onset + duration
+
+
+def _find_sleep_indices(
+    timeline: list[tuple[float, float, Optional[str]]],
+) -> list[int]:
+    return [
         idx
         for idx, (_, _, canonical) in enumerate(timeline)
         if canonical in SLEEP_STAGES
     ]
+
+
+def _compute_spt_bounds(
+    timeline: list[tuple[float, float, Optional[str]]],
+) -> Optional[tuple[float, float]]:
+    sleep_indices = _find_sleep_indices(timeline)
     if not sleep_indices:
         return None
 
@@ -90,13 +117,147 @@ def _compute_trim_bounds(
     last_idx = sleep_indices[-1]
     sleep_start = timeline[first_idx][0]
     sleep_end = timeline[last_idx][0] + timeline[last_idx][1]
+    return sleep_start, sleep_end
 
-    total_duration = timeline[-1][0] + timeline[-1][1]
+
+def _compute_trim_bounds_from_spt(
+    timeline: list[tuple[float, float, Optional[str]]],
+    spt_bounds: tuple[float, float],
+    padding_pre: float,
+    padding_post: float,
+) -> tuple[float, float]:
+    total_duration = _total_recording_duration(timeline)
+    sleep_start, sleep_end = spt_bounds
     trim_start = max(0.0, sleep_start - padding_pre)
     trim_end = min(total_duration, sleep_end + padding_post)
-    if trim_end <= trim_start:
-        return None
     return trim_start, trim_end
+
+
+# Sleep episode segmentation -------------------------------------------------
+
+
+def _generate_sleep_segments(
+    timeline: list[tuple[float, float, Optional[str]]],
+) -> list[tuple[float, float, float]]:
+    """Return sleep segments as (start, end, duration)."""
+
+    segments: list[tuple[float, float, float]] = []
+    for onset, duration, canonical in timeline:
+        if canonical in SLEEP_STAGES:
+            segments.append((onset, onset + duration, duration))
+    return segments
+
+
+def _merge_segments_with_gap(
+    segments: list[tuple[float, float, float]],
+    max_gap_sec: float,
+) -> list[tuple[float, float, float]]:
+    if not segments:
+        return []
+
+    merged: list[tuple[float, float, float]] = []
+    current_start, current_end, current_sleep = segments[0]
+
+    for onset, offset, sleep_duration in segments[1:]:
+        gap = onset - current_end
+        if gap <= max_gap_sec:
+            current_end = max(current_end, offset)
+            current_sleep += sleep_duration
+        else:
+            merged.append((current_start, current_end, current_sleep))
+            current_start, current_end, current_sleep = onset, offset, sleep_duration
+
+    merged.append((current_start, current_end, current_sleep))
+    return merged
+
+
+def _filter_segments_by_sleep_duration(
+    segments: list[tuple[float, float, float]],
+    min_sleep_duration_sec: float,
+) -> list[tuple[float, float, float]]:
+    if min_sleep_duration_sec <= 0:
+        return segments
+    return [seg for seg in segments if seg[2] >= min_sleep_duration_sec]
+
+
+def _choose_segments_by_strategy(
+    segments: list[tuple[float, float, float]],
+    strategy: str,
+) -> list[tuple[float, float, float]]:
+    if not segments:
+        return []
+
+    if strategy == "longest":
+        return [max(segments, key=lambda seg: seg[2])]
+    if strategy == "spt":
+        return [segments[0]]
+    if strategy == "all":
+        return segments
+    logging.warning("Estrategia de episodio desconocida: %s", strategy)
+    return [segments[0]]
+
+
+def _expand_segments_with_padding(
+    segments: list[tuple[float, float, float]],
+    timeline: list[tuple[float, float, Optional[str]]],
+    padding_pre: float,
+    padding_post: float,
+) -> list[dict[str, float]]:
+    total_duration = _total_recording_duration(timeline)
+    expanded: list[dict[str, float]] = []
+    for start, end, sleep_duration in segments:
+        trim_start = max(0.0, start - padding_pre)
+        trim_end = min(total_duration, end + padding_post)
+        expanded.append(
+            {
+                "episode_start": start,
+                "episode_end": end,
+                "trim_start": trim_start,
+                "trim_end": trim_end,
+                "sleep_duration": sleep_duration,
+            }
+        )
+    return expanded
+
+
+def _find_sleep_episodes(
+    annotations: mne.Annotations,
+    padding_pre: float,
+    padding_post: float,
+    wake_gap_sec: float,
+    min_episode_sleep_sec: float,
+    strategy: str,
+) -> list[dict[str, float]]:
+    timeline = _build_timeline(annotations)
+    spt_bounds = _compute_spt_bounds(timeline)
+    if spt_bounds is None:
+        return []
+
+    if strategy == "spt":
+        sleep_start, sleep_end = spt_bounds
+        segments = [(sleep_start, sleep_end, sleep_end - sleep_start)]
+    else:
+        sleep_segments = _generate_sleep_segments(timeline)
+        merged_segments = _merge_segments_with_gap(
+            sleep_segments, max(0.0, wake_gap_sec)
+        )
+        filtered_segments = _filter_segments_by_sleep_duration(
+            merged_segments, max(0.0, min_episode_sleep_sec)
+        )
+        segments = _choose_segments_by_strategy(filtered_segments, strategy)
+        if not segments:
+            return []
+
+    segments_with_padding = _expand_segments_with_padding(
+        segments, timeline, padding_pre, padding_post
+    )
+    spt_start, spt_end = spt_bounds
+    spt_duration = spt_end - spt_start
+    for item in segments_with_padding:
+        item["spt_start"] = spt_start
+        item["spt_end"] = spt_end
+        item["spt_duration"] = spt_duration
+    return segments_with_padding
 
 
 def _load_manifest(manifest_path: Path) -> pd.DataFrame:
@@ -134,8 +295,12 @@ def _write_manifest(results: Iterable[TrimResult], out_path: Path) -> None:
                 "trim_start_sec",
                 "trim_end_sec",
                 "trim_duration_sec",
+                "sleep_duration_sec",
                 "padding_pre_sec",
                 "padding_post_sec",
+                "episode_index",
+                "episodes_total",
+                "episode_strategy",
                 "notes",
             ]
         )
@@ -159,8 +324,16 @@ def _write_manifest(results: Iterable[TrimResult], out_path: Path) -> None:
                         if res.trim_duration_sec is not None
                         else ""
                     ),
+                    (
+                        f"{res.sleep_duration_sec:.3f}"
+                        if res.sleep_duration_sec is not None
+                        else ""
+                    ),
                     f"{res.padding_pre_sec:.1f}",
                     f"{res.padding_post_sec:.1f}",
+                    res.episode_index if res.episode_index is not None else "",
+                    res.episodes_total if res.episodes_total is not None else "",
+                    res.episode_strategy or "",
                     res.notes or "",
                 ]
             )
@@ -172,8 +345,11 @@ def _process_session(
     out_hyp_dir: Path,
     padding_pre: float,
     padding_post: float,
+    wake_gap_min: float,
+    min_episode_sleep_min: float,
+    episode_strategy: str,
     overwrite: bool,
-) -> TrimResult:
+) -> list[TrimResult]:
     subject_id = row["subject_id"]
     subset = row["subset"]
     version = row["version"]
@@ -182,150 +358,245 @@ def _process_session(
     hyp_path = Path(row["hypnogram_path"])
 
     if status != "ok":
-        return TrimResult(
-            subject_id,
-            subset,
-            version,
-            status,
-            None,
-            None,
-            None,
-            None,
-            None,
-            padding_pre,
-            padding_post,
-            notes="Estado != ok",
-        )
+        return [
+            TrimResult(
+                subject_id,
+                subset,
+                version,
+                status,
+                None,
+                None,
+                None,
+                None,
+                None,
+                padding_pre,
+                padding_post,
+                notes="Estado != ok",
+            )
+        ]
 
     if not psg_path.exists() or not hyp_path.exists():
-        return TrimResult(
-            subject_id,
-            subset,
-            version,
-            status,
-            None,
-            None,
-            None,
-            None,
-            None,
-            padding_pre,
-            padding_post,
-            notes="Archivos faltantes",
-        )
+        return [
+            TrimResult(
+                subject_id,
+                subset,
+                version,
+                status,
+                None,
+                None,
+                None,
+                None,
+                None,
+                padding_pre,
+                padding_post,
+                notes="Archivos faltantes",
+            )
+        ]
 
     try:
         annotations = mne.read_annotations(hyp_path)
     except Exception as exc:  # pragma: no cover - dependencias externas
         logging.exception("No se pudo leer el hipnograma %s", hyp_path)
-        return TrimResult(
-            subject_id,
-            subset,
-            version,
-            status,
-            None,
-            None,
-            None,
-            None,
-            None,
-            padding_pre,
-            padding_post,
-            notes=f"Error leyendo hipnograma: {exc}",
-        )
+        return [
+            TrimResult(
+                subject_id,
+                subset,
+                version,
+                status,
+                None,
+                None,
+                None,
+                None,
+                None,
+                padding_pre,
+                padding_post,
+                notes=f"Error leyendo hipnograma: {exc}",
+            )
+        ]
 
-    bounds = _compute_trim_bounds(annotations, padding_pre, padding_post)
-    if bounds is None:
-        return TrimResult(
-            subject_id,
-            subset,
-            version,
-            status,
-            None,
-            None,
-            None,
-            None,
-            None,
-            padding_pre,
-            padding_post,
-            notes="No se encontró ventana de sueño",
-        )
+    if episode_strategy not in {"spt", "longest", "all"}:
+        logging.warning("Estrategia %s no válida, se forza a 'spt'", episode_strategy)
+        episode_strategy = "spt"
 
-    trim_start, trim_end = bounds
-    trim_duration = trim_end - trim_start
+    episodes = _find_sleep_episodes(
+        annotations,
+        padding_pre,
+        padding_post,
+        wake_gap_min * 60.0,
+        min_episode_sleep_min * 60.0,
+        episode_strategy,
+    )
 
+    if not episodes:
+        return [
+            TrimResult(
+                subject_id,
+                subset,
+                version,
+                status,
+                None,
+                None,
+                None,
+                None,
+                None,
+                padding_pre,
+                padding_post,
+                notes="No se encontró ventana de sueño",
+            )
+        ]
+
+    results: list[TrimResult] = []
+    episodes_total = len(episodes)
     out_psg_dir.mkdir(parents=True, exist_ok=True)
     out_hyp_dir.mkdir(parents=True, exist_ok=True)
 
-    psg_out = out_psg_dir / f"{subject_id}_{subset}_{version}_trimmed_raw.fif"
-    hyp_out = out_hyp_dir / f"{subject_id}_{subset}_{version}_trimmed_annotations.csv"
+    for idx, episode in enumerate(episodes, start=1):
+        trim_start = episode["trim_start"]
+        trim_end = episode["trim_end"]
+        trim_duration = trim_end - trim_start
+        sleep_duration = episode["sleep_duration"]
 
-    if not overwrite and psg_out.exists() and hyp_out.exists():
-        logging.info(
-            "Archivos ya existen para %s, se omite (usar --overwrite para regenerar)",
-            subject_id,
+        suffix = "" if episodes_total == 1 else f"_e{idx}of{episodes_total}"
+        psg_out = (
+            out_psg_dir / f"{subject_id}_{subset}_{version}_trimmed{suffix}_raw.fif"
         )
-        return TrimResult(
-            subject_id,
-            subset,
-            version,
-            status,
-            psg_out,
-            hyp_out,
-            trim_start,
-            trim_end,
-            trim_duration,
-            padding_pre,
-            padding_post,
-            notes="Reuse",
+        hyp_out = (
+            out_hyp_dir
+            / f"{subject_id}_{subset}_{version}_trimmed{suffix}_annotations.csv"
         )
 
-    try:
-        trimmed_annotations = annotations.copy()
-        trimmed_annotations.crop(tmin=trim_start, tmax=trim_end)
-        trimmed_annotations.onset = trimmed_annotations.onset - trim_start
+        if not overwrite and psg_out.exists() and hyp_out.exists():
+            logging.info(
+                "Archivos ya existen para %s episodio %s, se omite (usar --overwrite para regenerar)",
+                subject_id,
+                idx,
+            )
+            results.append(
+                TrimResult(
+                    subject_id,
+                    subset,
+                    version,
+                    status,
+                    psg_out,
+                    hyp_out,
+                    trim_start,
+                    trim_end,
+                    trim_duration,
+                    padding_pre,
+                    padding_post,
+                    sleep_duration_sec=sleep_duration,
+                    episode_index=idx,
+                    episodes_total=episodes_total,
+                    episode_strategy=episode_strategy,
+                    notes="Reuse",
+                )
+            )
+            continue
 
-        raw = mne.io.read_raw_edf(psg_path, preload=True, verbose="ERROR")
-        raw.crop(tmin=trim_start, tmax=trim_end)
-        raw.set_annotations(trimmed_annotations)
-        raw.save(psg_out, overwrite=True)
+        try:
+            raw = mne.io.read_raw_edf(psg_path, preload=True, verbose="ERROR")
+            recording_tmax = raw.times[-1]
+            effective_trim_end = min(trim_end, recording_tmax)
+            if effective_trim_end <= trim_start:
+                logging.warning(
+                    "Ventana sin longitud útil tras ajustar al máximo del PSG (%s) episodio %s",
+                    subject_id,
+                    idx,
+                )
+                results.append(
+                    TrimResult(
+                        subject_id,
+                        subset,
+                        version,
+                        status,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        padding_pre,
+                        padding_post,
+                        episode_index=idx,
+                        episodes_total=episodes_total,
+                        episode_strategy=episode_strategy,
+                        notes="Ventana vacía tras ajustar al final del PSG",
+                    )
+                )
+                continue
 
-        ann_df = pd.DataFrame(
-            {
-                "onset": trimmed_annotations.onset,
-                "duration": trimmed_annotations.duration,
-                "description": trimmed_annotations.description,
-            }
+            trim_end = effective_trim_end
+            trim_duration = trim_end - trim_start
+
+            trimmed_annotations = annotations.copy()
+            trimmed_annotations.crop(tmin=trim_start, tmax=trim_end)
+            trimmed_annotations.onset = trimmed_annotations.onset - trim_start
+
+            raw.crop(tmin=trim_start, tmax=trim_end)
+            raw.set_annotations(trimmed_annotations)
+            raw.save(psg_out, overwrite=True)
+
+            ann_df = pd.DataFrame(
+                {
+                    "onset": trimmed_annotations.onset,
+                    "duration": trimmed_annotations.duration,
+                    "description": trimmed_annotations.description,
+                }
+            )
+            ann_df.to_csv(hyp_out, index=False)
+        except Exception as exc:  # pragma: no cover - dependencias externas
+            logging.exception("Fallo al recortar %s episodio %s", subject_id, idx)
+            results.append(
+                TrimResult(
+                    subject_id,
+                    subset,
+                    version,
+                    status,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    padding_pre,
+                    padding_post,
+                    episode_index=idx,
+                    episodes_total=episodes_total,
+                    episode_strategy=episode_strategy,
+                    notes=f"Error procesando episodio: {exc}",
+                )
+            )
+            continue
+
+        results.append(
+            TrimResult(
+                subject_id,
+                subset,
+                version,
+                status,
+                psg_out,
+                hyp_out,
+                trim_start,
+                trim_end,
+                trim_duration,
+                padding_pre,
+                padding_post,
+                sleep_duration_sec=sleep_duration,
+                episode_index=idx,
+                episodes_total=episodes_total,
+                episode_strategy=episode_strategy,
+                notes=(
+                    "Episodio recortado"
+                    if episodes_total == 1
+                    else f"Episodio {idx}/{episodes_total}"
+                )
+                + (
+                    " (ajustado al límite del PSG)"
+                    if abs(trim_end - episode["trim_end"]) > 1e-6
+                    else ""
+                ),
+            )
         )
-        ann_df.to_csv(hyp_out, index=False)
-    except Exception as exc:  # pragma: no cover - dependencias externas
-        logging.exception("Fallo al recortar %s", subject_id)
-        return TrimResult(
-            subject_id,
-            subset,
-            version,
-            status,
-            None,
-            None,
-            None,
-            None,
-            None,
-            padding_pre,
-            padding_post,
-            notes=f"Error procesando sesión: {exc}",
-        )
 
-    return TrimResult(
-        subject_id,
-        subset,
-        version,
-        status,
-        psg_out,
-        hyp_out,
-        trim_start,
-        trim_end,
-        trim_duration,
-        padding_pre,
-        padding_post,
-    )
+    return results
 
 
 def run(args: argparse.Namespace) -> int:
@@ -347,21 +618,24 @@ def run(args: argparse.Namespace) -> int:
 
     results: list[TrimResult] = []
     for _, row in to_process.iterrows():
-        res = _process_session(
+        res_items = _process_session(
             row,
             out_psg_dir,
             out_hyp_dir,
             args.pre_padding,
             args.post_padding,
+            args.wake_gap_min,
+            args.min_episode_min,
+            args.episode_strategy,
             args.overwrite,
         )
-        results.append(res)
+        results.extend(res_items)
 
     _write_manifest(results, out_manifest)
     logging.info("Manifest recortado guardado en %s", out_manifest)
     ok = sum(1 for r in results if r.psg_trimmed_path)
     skipped = len(results) - ok
-    logging.info("Sesiones exitosas: %s | saltadas: %s", ok, skipped)
+    logging.info("Episodios exitosos: %s | saltados: %s", ok, skipped)
     return 0
 
 
@@ -387,14 +661,42 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--pre-padding",
         type=float,
-        default=3600.0,
+        default=900.0,
         help="Segundos de vigilia a conservar antes del inicio del sueño",
     )
     parser.add_argument(
         "--post-padding",
         type=float,
-        default=3600.0,
+        default=900.0,
         help="Segundos de vigilia a conservar tras el despertar final",
+    )
+    parser.add_argument(
+        "--episode-strategy",
+        choices=["spt", "longest", "all"],
+        default="spt",
+        help=(
+            "Cómo seleccionar episodios de sueño detectados: 'spt' usa toda la "
+            "ventana sueño-sueño; 'longest' recorta sólo el episodio de sueño "
+            "más largo; 'all' exporta todos los episodios"
+        ),
+    )
+    parser.add_argument(
+        "--wake-gap-min",
+        type=float,
+        default=60.0,
+        help=(
+            "Minutos de vigilia continua necesarios para separar episodios "
+            "cuando se usa 'longest' o 'all'"
+        ),
+    )
+    parser.add_argument(
+        "--min-episode-min",
+        type=float,
+        default=20.0,
+        help=(
+            "Duración mínima (min) de sueño acumulado para conservar un episodio "
+            "cuando se usa 'longest' o 'all'"
+        ),
     )
     parser.add_argument(
         "--limit",

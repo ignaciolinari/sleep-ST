@@ -14,7 +14,7 @@ Clasificar estadios de sueño a partir de EEG, EOG y EMG usando modelos de Machi
          - `hypnograms/`: anotaciones recortadas en `.csv`
 - `notebooks/`: exploración y análisis
    - `01_raw_exploration.ipynb`
-   - `02_processed_exploration.ipynb`
+   - `02_trimmed_exploration.ipynb`
 - `src/`: código fuente
    - `check_data.py`: automatiza QA (hashes, metadata y artefactos procesados)
    - `download.py`: descarga Sleep-EDF (wget / wfdb) y dispara QA post-descarga
@@ -48,10 +48,10 @@ python src/manifest.py --version 1.0.0 --subset sleep-cassette --raw-root data/r
 python src/preprocessing.py \
   --manifest data/processed/manifest.csv \
   --out-root data/processed/sleep_trimmed \
-  --out-manifest data/processed/manifest_trimmed.csv \
-  --pre-padding 3600 --post-padding 3600
+  --out-manifest data/processed/manifest_trimmed.csv
+# Padding por defecto: 900 s (15 min) antes y después del SPT-window.
 ```
-5) Explorar en notebooks `notebooks/01_raw_exploration.ipynb` y `02_processed_exploration.ipynb`
+5) Explorar en notebooks `notebooks/01_raw_exploration.ipynb` y `02_trimmed_exploration.ipynb`
 
 ## Entorno
 Entorno base:
@@ -181,18 +181,70 @@ python src/preprocessing.py \
    --manifest data/processed/manifest.csv \
    --out-root data/processed/sleep_trimmed \
    --out-manifest data/processed/manifest_trimmed.csv \
-   --pre-padding 3600 --post-padding 3600
+   --pre-padding 900 --post-padding 900
 
 # Limitar a N sesiones para pruebas
 python src/preprocessing.py --limit 5
 
 # Reescribir si ya existen salidas
 python src/preprocessing.py --overwrite
+
+# Segmentar episodios de sueño fragmentado
+python src/preprocessing.py \
+   --episode-strategy all \
+   --wake-gap-min 60 \
+   --min-episode-min 20
 ```
 
 Notas:
-- El recorte usa las anotaciones del hipnograma para detectar la primera y última etapa de sueño, colapsando N3/N4.
+- El recorte detecta el *Sleep Period Time* (SPT): desde el primer epoch etiquetado como sueño hasta el último, lo recorta y añade un margen configurable (`--pre/post-padding`, por defecto 900 s = 15 min) de vigilia antes y después.
+- Las estrategias `--episode-strategy` (`spt`, `longest`, `all`) permiten dividir noches con vigilia prolongada interna. Con `all` cada bloque de sueño separado por al menos `--wake-gap-min` minutos de vigilia se exporta como un episodio distinto, opcionalmente descartando los muy cortos (`--min-episode-min`).
 - La visualización con `view_subject.py` lee EDF crudos; los `.fif` recortados no se visualizan con ese script por ahora.
+
+### Elegir estrategia de episodios (sin Lights On/Off)
+
+Sleep-EDF no incluye anotaciones estandarizadas de "Lights Off/On" en los hipnogramas, por lo que usar SPT (desde el primer al último epoch de sueño) puede incluir siestas o segmentos muy alejados del periodo nocturno principal.
+
+Recomendaciones:
+
+- `spt`: usa todo el intervalo entre el primer y el último episodio de sueño. Útil para noches sin siestas largas; puede fallar si hay siestas tempranas.
+- `longest`: detecta episodios de sueño separados por vigilia de al menos `--wake-gap-min` minutos y conserva el episodio con mayor tiempo de sueño acumulado. Es la opción recomendada cuando no hay Lights On/Off.
+  - Elegí `--wake-gap-min` según tolerancia a despertares: 60 min une cortes breves; 90–120 min une despertares largos.
+  - Usá `--min-episode-min` (p.ej., 120) para descartar siestas cortas.
+- `all`: exporta todos los episodios detectados para inspección manual.
+
+Ejemplo recomendado (evita siestas y conserva el bloque principal):
+
+```bash
+python src/preprocessing.py \
+  --manifest data/processed/manifest.csv \
+  --out-root data/processed/sleep_trimmed \
+  --out-manifest data/processed/manifest_trimmed.csv \
+  --pre-padding 900 --post-padding 900 \
+  --episode-strategy longest --wake-gap-min 60 --min-episode-min 120 \
+  --overwrite
+```
+
+Notas prácticas:
+
+- Si hay un despertar largo en medio de la noche y supera `--wake-gap-min`, la noche se parte en dos episodios y se elige el que acumula más sueño. Si preferís mantenerlo como uno, aumentá `--wake-gap-min`.
+- Si una siesta supera `--min-episode-min` y se vuelve candidata, subí ese umbral o inspeccioná con `--episode-strategy all`.
+
+**Receta: separar episodios (exportar todos)**
+
+```bash
+python src/preprocessing.py \
+  --manifest data/processed/manifest.csv \
+  --out-root data/processed/sleep_trimmed \
+  --out-manifest data/processed/manifest_trimmed.csv \
+  --pre-padding 900 --post-padding 900 \
+  --episode-strategy all --wake-gap-min 60 --min-episode-min 60 \
+  --overwrite
+```
+
+Salida esperada:
+- Varios archivos por noche con sufijos `_e{i}of{n}` en `sleep_trimmed/psg` y `sleep_trimmed/hypnograms` (uno por episodio).
+- `manifest_trimmed.csv` incluye una fila por episodio con `episode_index` y `episodes_total`.
 
 ## Visualización rápida de señales
 Para explorar las señales de un sujeto puntual, usá `src/view_subject.py`. Requiere haber generado el `manifest.csv` previamente.
