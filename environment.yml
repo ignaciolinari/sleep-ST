@@ -4,7 +4,7 @@ channels:
 dependencies:
   - python=3.10
   # Core scientific stack
-  - numpy
+  - numpy<2.0  # TensorFlow requiere NumPy < 2.0
   - scipy
   - pandas
   - scikit-learn
@@ -24,8 +24,12 @@ dependencies:
   - wget
   # ML dependencies
   - pyarrow  # For Parquet file format support
+  # Testing
+  - pytest
+  - pytest-cov
   - pip
   - pip:
     - yasa
     - xgboost
-    - tensorflow>=2.16.0
+    - protobuf<5.0  # TensorFlow requiere Protobuf < 5.0
+    - tensorflow==2.16.2  # Versión estable que funciona en macOS (con CPU forzado)

@@ -43,6 +43,7 @@ __pycache__/
 *.dll
 .ruff_cache/
 .mypy_cache/
+.pytest_cache/
 
 # Archivos de logs y debug
 *.log

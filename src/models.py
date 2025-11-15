@@ -1051,6 +1051,15 @@ def train_cnn1d(
     if not TF_AVAILABLE:
         raise ImportError("TensorFlow no está disponible.")
 
+    # Forzar uso de CPU para evitar problemas con Metal en macOS
+    # Esto previene bus errors y segmentation faults en Apple Silicon
+    import os
+    import tensorflow as tf
+
+    os.environ["TF_METAL_PLUGIN_LIBRARY_PATH"] = ""
+    os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+    tf.config.set_visible_devices([], "GPU")  # Deshabilitar GPU/Metal
+
     logging.info("=" * 60)
     logging.info("ETAPA: ENTRENAMIENTO - CNN1D")
     logging.info("=" * 60)
@@ -1220,6 +1229,15 @@ def train_lstm(
     """
     if not TF_AVAILABLE:
         raise ImportError("TensorFlow no está disponible.")
+
+    # Forzar uso de CPU para evitar problemas con Metal en macOS
+    # Esto previene bus errors y segmentation faults en Apple Silicon
+    import os
+    import tensorflow as tf
+
+    os.environ["TF_METAL_PLUGIN_LIBRARY_PATH"] = ""
+    os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+    tf.config.set_visible_devices([], "GPU")  # Deshabilitar GPU/Metal
 
     logging.info("=" * 60)
     logging.info("ETAPA: ENTRENAMIENTO - LSTM")
@@ -1468,9 +1486,11 @@ def cross_validate_model(
         if scoring == "accuracy":
             score = accuracy_score(y_test_fold, y_pred_fold)
         elif scoring == "f1_macro":
-            score = f1_score(y_test_fold, y_pred_fold, average="macro")
+            score = f1_score(y_test_fold, y_pred_fold, average="macro", zero_division=0)
         elif scoring == "f1_weighted":
-            score = f1_score(y_test_fold, y_pred_fold, average="weighted")
+            score = f1_score(
+                y_test_fold, y_pred_fold, average="weighted", zero_division=0
+            )
         elif scoring == "kappa":
             score = cohen_kappa_score(y_test_fold, y_pred_fold)
         else:
@@ -1662,18 +1682,22 @@ def evaluate_model(
     logging.info("Calculando métricas de evaluación...")
     accuracy = accuracy_score(y_test, y_pred)
     kappa = cohen_kappa_score(y_test, y_pred)
-    f1_macro = f1_score(y_test, y_pred, average="macro")
-    f1_weighted = f1_score(y_test, y_pred, average="weighted")
+    f1_macro = f1_score(y_test, y_pred, average="macro", zero_division=0)
+    f1_weighted = f1_score(y_test, y_pred, average="weighted", zero_division=0)
 
     # F1 por clase
-    f1_per_class = f1_score(y_test, y_pred, average=None, labels=stage_order)
+    f1_per_class = f1_score(
+        y_test, y_pred, average=None, labels=stage_order, zero_division=0
+    )
     f1_dict = {stage: float(score) for stage, score in zip(stage_order, f1_per_class)}
 
     # Matriz de confusión
     cm = confusion_matrix(y_test, y_pred, labels=stage_order)
 
     # Reporte de clasificación
-    report = classification_report(y_test, y_pred, labels=stage_order, output_dict=True)
+    report = classification_report(
+        y_test, y_pred, labels=stage_order, output_dict=True, zero_division=0
+    )
 
     logging.info("✓ Evaluación completada")
     logging.info(f"  Accuracy: {accuracy:.4f}")
@@ -1824,7 +1848,13 @@ def save_model(model, path: Path | str) -> None:
 
     if is_keras_model:
         # Guardar modelo de Keras (guarda arquitectura, pesos y optimizador)
-        model.save(str(path))
+        # TensorFlow 2.16+ requiere extensión .keras o .h5
+        save_path = Path(path)
+        if not save_path.suffix:
+            save_path = save_path.with_suffix(".keras")
+        elif save_path.suffix not in [".keras", ".h5"]:
+            save_path = save_path.with_suffix(".keras")
+        model.save(str(save_path))
 
         # Guardar atributos personalizados por separado (Keras no los guarda automáticamente)
         custom_attrs = {}
@@ -1845,7 +1875,7 @@ def save_model(model, path: Path | str) -> None:
             custom_attrs["channel_stds_"] = model.channel_stds_.tolist()
         if hasattr(model, "scaler_"):
             # StandardScaler necesita guardarse con pickle
-            scaler_path = path.parent / f"{path.name}_scaler.pkl"
+            scaler_path = save_path.parent / f"{save_path.stem}_scaler.pkl"
             with open(scaler_path, "wb") as f:
                 pickle.dump(model.scaler_, f)
             custom_attrs["scaler_path"] = str(scaler_path)
@@ -1862,14 +1892,14 @@ def save_model(model, path: Path | str) -> None:
                 else:
                     history_serializable[key] = values
 
-            history_path = path.parent / f"{path.name}_history.json"
+            history_path = save_path.parent / f"{save_path.stem}_history.json"
             with open(history_path, "w") as f:
                 json.dump(history_serializable, f, indent=2)
             custom_attrs["history_path"] = str(history_path)
 
         # Guardar atributos personalizados en JSON si hay alguno
         if custom_attrs:
-            custom_attrs_path = path.parent / f"{path.name}_custom_attrs.json"
+            custom_attrs_path = save_path.parent / f"{save_path.stem}_custom_attrs.json"
             with open(custom_attrs_path, "w") as f:
                 json.dump(custom_attrs, f, indent=2)
             logging.info(f"Atributos personalizados guardados en {custom_attrs_path}")
@@ -1897,61 +1927,83 @@ def load_model(path: Path | str):
     path = Path(path)
 
     # Intentar cargar como modelo de Keras primero
-    if TF_AVAILABLE and path.is_dir():
-        # Los modelos de Keras se guardan como directorios
-        try:
-            model = keras.models.load_model(str(path))
+    # TensorFlow 2.16+ puede guardar como .keras (archivo) o directorio
+    if TF_AVAILABLE:
+        # Intentar cargar como archivo .keras primero
+        keras_path = path
+        if path.is_dir():
+            # Modelo guardado como directorio (formato antiguo)
+            keras_path = path
+        elif path.suffix in [".keras", ".h5"]:
+            # Modelo guardado como archivo
+            keras_path = path
+        elif not path.suffix:
+            # Sin extensión, intentar con .keras
+            keras_path = path.with_suffix(".keras")
+        else:
+            keras_path = None
 
-            # Cargar atributos personalizados si existen
-            custom_attrs_path = path.parent / f"{path.name}_custom_attrs.json"
-            if custom_attrs_path.exists():
-                with open(custom_attrs_path, "r") as f:
-                    custom_attrs = json.load(f)
+        if keras_path and (keras_path.is_dir() or keras_path.exists()):
+            try:
+                model = keras.models.load_model(str(keras_path))
 
-                # Restaurar LabelEncoder
-                if "label_encoder_classes_" in custom_attrs:
-                    le = LabelEncoder()
-                    le.classes_ = np.array(custom_attrs["label_encoder_classes_"])
-                    model.label_encoder_ = le
+                # Cargar atributos personalizados si existen
+                # Usar stem (nombre sin extensión) para archivos .keras
+                attrs_name = (
+                    keras_path.stem if keras_path.is_file() else keras_path.name
+                )
+                custom_attrs_path = (
+                    keras_path.parent / f"{attrs_name}_custom_attrs.json"
+                )
 
-                # Restaurar clases
-                if "classes_" in custom_attrs:
-                    model.classes_ = np.array(custom_attrs["classes_"])
+                if custom_attrs_path.exists():
+                    with open(custom_attrs_path, "r") as f:
+                        custom_attrs = json.load(f)
 
-                # Restaurar estadísticas de normalización de CNN1D
-                if "channel_means_" in custom_attrs:
-                    model.channel_means_ = np.array(custom_attrs["channel_means_"])
-                if "channel_stds_" in custom_attrs:
-                    model.channel_stds_ = np.array(custom_attrs["channel_stds_"])
+                    # Restaurar LabelEncoder
+                    if "label_encoder_classes_" in custom_attrs:
+                        le = LabelEncoder()
+                        le.classes_ = np.array(custom_attrs["label_encoder_classes_"])
+                        model.label_encoder_ = le
 
-                # Restaurar scaler de LSTM
-                if "scaler_path" in custom_attrs:
-                    scaler_path = Path(custom_attrs["scaler_path"])
-                    if scaler_path.exists():
-                        with open(scaler_path, "rb") as f:
-                            model.scaler_ = pickle.load(f)  # nosec B301
-                    else:
-                        logging.warning(
-                            f"Archivo de scaler no encontrado: {scaler_path}"
-                        )
+                    # Restaurar clases
+                    if "classes_" in custom_attrs:
+                        model.classes_ = np.array(custom_attrs["classes_"])
 
-                # Restaurar historial de entrenamiento
-                if "history_path" in custom_attrs:
-                    history_path = Path(custom_attrs["history_path"])
-                    if history_path.exists():
-                        with open(history_path, "r") as f:
-                            model.history_ = json.load(f)
-                    else:
-                        logging.warning(
-                            f"Archivo de historial no encontrado: {history_path}"
-                        )
+                    # Restaurar estadísticas de normalización de CNN1D
+                    if "channel_means_" in custom_attrs:
+                        model.channel_means_ = np.array(custom_attrs["channel_means_"])
+                    if "channel_stds_" in custom_attrs:
+                        model.channel_stds_ = np.array(custom_attrs["channel_stds_"])
 
-            logging.info(f"Modelo Keras cargado desde {path}")
-            return model
-        except Exception as e:
-            logging.error(f"Error cargando modelo Keras desde {path}: {e}")
-            logging.info("Intentando cargar como modelo tradicional...")
-            # No hacer pass silencioso, dejar que intente cargar como modelo tradicional
+                    # Restaurar scaler de LSTM
+                    if "scaler_path" in custom_attrs:
+                        scaler_path = Path(custom_attrs["scaler_path"])
+                        if scaler_path.exists():
+                            with open(scaler_path, "rb") as f:
+                                model.scaler_ = pickle.load(f)  # nosec B301
+                        else:
+                            logging.warning(
+                                f"Archivo de scaler no encontrado: {scaler_path}"
+                            )
+
+                    # Restaurar historial de entrenamiento
+                    if "history_path" in custom_attrs:
+                        history_path = Path(custom_attrs["history_path"])
+                        if history_path.exists():
+                            with open(history_path, "r") as f:
+                                model.history_ = json.load(f)
+                        else:
+                            logging.warning(
+                                f"Archivo de historial no encontrado: {history_path}"
+                            )
+
+                logging.info(f"Modelo Keras cargado desde {keras_path}")
+                return model
+            except Exception as e:
+                logging.error(f"Error cargando modelo Keras desde {path}: {e}")
+                logging.info("Intentando cargar como modelo tradicional...")
+                # No hacer pass silencioso, dejar que intente cargar como modelo tradicional
 
     # Cargar modelo tradicional con pickle
     with open(path, "rb") as f:
