@@ -265,8 +265,102 @@ python src/view_subject.py --subject-id SC4001E \
 El script también acepta rutas directas a archivos `.edf` (`--psg-path` / `--hypnogram-path`), filtros por subset/versión dentro del manifest y parámetros de ventana (`--start`, `--duration`).
 
 
-## Estado de features y modelos
-- `src/features.py` y `src/models.py` están en construcción. La extracción de features clásicas (espectrales/tiempo-frecuencia) y pipelines de entrenamiento se documentarán aquí cuando estén listos.
+## Extracción de features y entrenamiento de modelos
+
+### Features
+
+El módulo `src/features.py` implementa extracción de características adaptadas para setups de pocos canales (2 EEG + EOG + EMG):
+
+- **Features espectrales** (por canal): potencia relativa y absoluta en bandas delta, theta, alpha, sigma, beta, gamma
+- **Features temporales**: estadísticas básicas, parámetros de Hjorth, entropía, zero crossing rate
+- **Features de relación entre canales**: correlaciones, ratios EMG/EEG, EOG/EMG, coherencia EEG-EOG
+
+Las features se extraen usando YASA y están optimizadas para distinguir estadios de sueño con pocos canales.
+
+### Workflow recomendado: Extraer features una vez, entrenar múltiples modelos
+
+**⚠️ Importante:** Extraer features cada vez que entrenas un modelo es ineficiente. Es mejor extraerlas una vez y reutilizarlas:
+
+```bash
+# 1. Extraer features una vez y guardarlas (toma ~20-30 minutos)
+python -m src.extract_features \
+  --manifest data/processed/manifest_trimmed.csv \
+  --output data/processed/features.parquet \
+  --format parquet
+
+# 2. Entrenar múltiples modelos rápidamente usando las features pre-extraídas
+python -m src.models \
+  --features-file data/processed/features.parquet \
+  --model-type random_forest \
+  --output-dir models
+
+python -m src.models \
+  --features-file data/processed/features.parquet \
+  --model-type xgboost \
+  --n-estimators 300 \
+  --max-depth 8 \
+  --output-dir models
+```
+
+### Entrenamiento de modelos
+
+El módulo `src/models.py` implementa pipelines de ML para clasificación de estadios:
+
+**Uso básico desde línea de comandos:**
+
+```bash
+# Opción 1: Usar features pre-extraídas (RECOMENDADO)
+python -m src.models \
+  --features-file data/processed/features.parquet \
+  --model-type random_forest \
+  --output-dir models
+
+# Opción 2: Extraer features sobre la marcha (más lento)
+python -m src.models \
+  --manifest data/processed/manifest_trimmed.csv \
+  --model-type random_forest \
+  --output-dir models \
+  --limit 10  # Limitar a 10 sesiones para pruebas
+
+# Entrenar XGBoost con features pre-extraídas
+python -m src.models \
+  --features-file data/processed/features.parquet \
+  --model-type xgboost \
+  --n-estimators 300 \
+  --max-depth 8
+```
+
+**Uso programático:**
+
+```python
+from src.models import run_training_pipeline
+
+metrics = run_training_pipeline(
+    manifest_path="data/processed/manifest_trimmed.csv",
+    model_type="random_forest",
+    output_dir="models",
+    test_size=0.2,
+    limit=10,  # Opcional: limitar sesiones para pruebas
+    epoch_length=30.0,
+    n_estimators=200,
+    max_depth=None,
+)
+```
+
+**Extracción de features manual:**
+
+```python
+from src.features import extract_features_from_session
+
+features_df = extract_features_from_session(
+    psg_path="data/processed/sleep_trimmed/psg/SC4001E_trimmed_raw.fif",
+    hypnogram_path="data/processed/sleep_trimmed/hypnograms/SC4001E_trimmed_annotations.csv",
+    epoch_length=30.0,
+    sfreq=100.0,  # Opcional: resamplear
+)
+```
+
+Los modelos entrenados se guardan en formato pickle junto con los nombres de las features para facilitar la predicción posterior.
 
 ## Calidad de código (pre-commit)
 Para mantener formato y checks automáticos antes de cada commit se usa pre-commit con Ruff/Black y validaciones básicas.

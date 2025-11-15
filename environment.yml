@@ -22,3 +22,9 @@ dependencies:
   - jupyterlab
   # CLI utils
   - wget
+  # ML dependencies
+  - pyarrow  # For Parquet file format support
+  - pip
+  - pip:
+    - yasa
+    - xgboost

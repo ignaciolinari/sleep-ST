@@ -1,6 +1,12 @@
 ###########################################################
 # Archivos de datos (no subir dataset Sleep-EDF)
-data/
+# Ignorar todo el contenido de data/ pero permitir .gitkeep
+# Ignore everything in data/ recursively
+data/**
+# But un-ignore directories (so git can traverse them)
+!data/**/
+# And un-ignore .gitkeep files
+!data/**/.gitkeep
 *.edf
 *.hyp
 *.npy
@@ -8,8 +14,10 @@ data/
 *.mat
 *.csv
 *.tsv
-out/
-tmp/
+out/*
+!out/.gitkeep
+tmp/*
+!tmp/.gitkeep
 *.png
 *.jpg
 *.jpeg
@@ -33,6 +41,8 @@ __pycache__/
 *.pyd
 *.so
 *.dll
+.ruff_cache/
+.mypy_cache/
 
 # Archivos de logs y debug
 *.log
@@ -56,3 +66,6 @@ build/
 
 # Configuración personal
 *.json
+
+# Vintage (archivos antiguos)
+vintage/

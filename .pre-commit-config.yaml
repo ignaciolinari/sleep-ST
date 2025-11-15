@@ -18,6 +18,9 @@ repos:
       - id: trailing-whitespace
       - id: mixed-line-ending
       - id: detect-private-key
+      - id: check-added-large-files
+        args: ["--maxkb=500"]  # Warn if files > 500KB
+      - id: check-merge-conflict
 
   # Ruff for Python linting/formatting (fast)
   - repo: https://github.com/astral-sh/ruff-pre-commit
@@ -27,12 +30,22 @@ repos:
         args: ["--fix"]
       - id: ruff-format
 
-  # Black (optional if you prefer Black's style; can be redundant with ruff-format)
-  - repo: https://github.com/psf/black
-    rev: 24.8.0
+  # Type checking with mypy
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.11.2
     hooks:
-      - id: black
-        language_version: python3
+      - id: mypy
+        args: ["--ignore-missing-imports", "--no-strict-optional"]
+        # Exclude data/tmp folders and notebooks
+        exclude: ^(data/|tmp/|notebooks/)
+
+  # Security linting with bandit
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.9
+    hooks:
+      - id: bandit
+        args: ["-ll", "-i"]  # Low/Medium severity, skip .gitignore files
+        exclude: ^(data/|tmp/|notebooks/)
 
   # nbQA to run tools on Jupyter Notebooks
   - repo: https://github.com/nbQA-dev/nbQA
@@ -41,5 +54,5 @@ repos:
       - id: nbqa-ruff
         additional_dependencies: ["ruff==0.6.9"]
         args: ["--fix"]
-      - id: nbqa-black
-        additional_dependencies: ["black==24.8.0"]
+      - id: nbqa-ruff-format
+        additional_dependencies: ["ruff==0.6.9"]
