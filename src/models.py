@@ -1,7 +1,7 @@
 """Entrenamiento y evaluación de modelos para clasificación de estadios de sueño.
 
 Este módulo implementa pipelines de ML para clasificar estadios de sueño
-usando Random Forest y otras técnicas, optimizadas para setups de pocos canales.
+usando Random Forest, XGBoost, CNN1D y LSTM, optimizadas para setups de pocos canales.
 """
 
 from __future__ import annotations
@@ -25,14 +25,32 @@ from sklearn.metrics import (
     f1_score,
 )
 from sklearn.model_selection import train_test_split, RandomizedSearchCV
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 import xgboost as xgb
 
-from src.features import extract_features_from_session
+from src.features import (
+    extract_features_from_session,
+    load_psg_data,
+    load_hypnogram,
+    create_epochs,
+    assign_stages_to_epochs,
+)
 from src.crossval import SubjectTimeSeriesSplit, GroupTimeSeriesSplit
 
 # Estadios en orden estándar
 STAGE_ORDER = ["W", "N1", "N2", "N3", "REM"]
+
+# Intentar importar TensorFlow (opcional para modelos tradicionales)
+try:
+    from tensorflow import keras
+    from tensorflow.keras import layers
+
+    TF_AVAILABLE = True
+except ImportError:
+    TF_AVAILABLE = False
+    logging.warning(
+        "TensorFlow no está disponible. Los modelos de deep learning no funcionarán."
+    )
 
 
 def prepare_features_dataset(
@@ -122,7 +140,11 @@ def prepare_features_dataset(
             if not features_df.empty:
                 features_df["subject_id"] = row["subject_id"]
                 # Extraer subject_core (primeros 5 caracteres) para agrupar noches del mismo sujeto
-                features_df["subject_core"] = row["subject_id"][:5]
+                # Si subject_id tiene menos de 5 caracteres, usar el ID completo
+                subject_id_str = str(row["subject_id"])
+                features_df["subject_core"] = (
+                    subject_id_str[:5] if len(subject_id_str) >= 5 else subject_id_str
+                )
                 features_df["session_idx"] = idx
                 # Asegurar que los epochs mantengan orden temporal dentro de la sesión
                 # (ya están ordenados por epoch_time_start en extract_features_from_session)
@@ -147,6 +169,453 @@ def prepare_features_dataset(
     )
 
     return combined
+
+
+def prepare_raw_epochs_dataset(
+    manifest_path: Path | str,
+    limit: Optional[int] = None,
+    epoch_length: float = 30.0,
+    sfreq: Optional[float] = None,
+    channels: Optional[list[str]] = None,
+) -> tuple[np.ndarray, np.ndarray, pd.DataFrame]:
+    """Prepara dataset de epochs raw (señales) para modelos de deep learning.
+
+    Esta función carga las señales raw de cada epoch y las organiza en arrays
+    para entrenar modelos CNN1D que trabajan directamente con las señales.
+
+    Parameters
+    ----------
+    manifest_path : Path | str
+        Ruta al manifest CSV con sesiones procesadas
+    limit : int, optional
+        Limitar número de sesiones a procesar (para pruebas)
+    epoch_length : float
+        Duración de cada epoch en segundos
+    sfreq : float, optional
+        Frecuencia de muestreo objetivo
+    channels : list[str], optional
+        Canales a usar. Si None, usa DEFAULT_CHANNELS.
+
+    Returns
+    -------
+    X_raw : np.ndarray
+        Array de forma (n_epochs, n_channels, n_samples_per_epoch) con señales raw
+    y : np.ndarray
+        Array con etiquetas de estadios (W, N1, N2, N3, REM)
+    metadata_df : pd.DataFrame
+        DataFrame con metadata de cada epoch (subject_id, subject_core, etc.)
+    """
+    if not TF_AVAILABLE:
+        raise ImportError(
+            "TensorFlow no está disponible. Instala TensorFlow para usar modelos de deep learning."
+        )
+
+    manifest = pd.read_csv(manifest_path)
+    manifest_ok = manifest[manifest["status"] == "ok"].copy()
+
+    if limit:
+        manifest_ok = manifest_ok.head(limit)
+        logging.info(f"Procesando solo {len(manifest_ok)} sesiones (modo limit)")
+
+    all_epochs = []
+    all_stages = []
+    all_metadata = []
+
+    for idx, row in manifest_ok.iterrows():
+        psg_path_str = row.get("psg_trimmed_path", "")
+        hyp_path_str = row.get("hypnogram_trimmed_path", "")
+
+        psg_path = Path(psg_path_str) if psg_path_str else None
+        hyp_path = Path(hyp_path_str) if hyp_path_str else None
+
+        if (
+            not psg_path
+            or not hyp_path
+            or not psg_path.exists()
+            or not hyp_path.exists()
+        ):
+            manifest_dir = Path(manifest_path).parent
+            subject_id = row["subject_id"]
+            subset = row.get("subset", "sleep-cassette")
+            version = row.get("version", "1.0.0")
+
+            psg_path = (
+                manifest_dir
+                / "sleep_trimmed"
+                / "psg"
+                / f"{subject_id}_{subset}_{version}_trimmed_raw.fif"
+            )
+            hyp_path = (
+                manifest_dir
+                / "sleep_trimmed"
+                / "hypnograms"
+                / f"{subject_id}_{subset}_{version}_trimmed_annotations.csv"
+            )
+
+        if not psg_path.exists() or not hyp_path.exists():
+            logging.warning(
+                f"Archivos faltantes para {row['subject_id']} (buscado en {psg_path}), saltando"
+            )
+            continue
+
+        try:
+            # Cargar datos raw
+            data, actual_sfreq, ch_names = load_psg_data(psg_path, channels, sfreq)
+            hypnogram = load_hypnogram(hyp_path)
+
+            # Crear epochs
+            epochs, epochs_times = create_epochs(
+                data, actual_sfreq, epoch_length=epoch_length
+            )
+
+            if len(epochs) == 0:
+                continue
+
+            # Asignar estadios
+            stages = assign_stages_to_epochs(epochs_times, hypnogram, epoch_length)
+
+            # Filtrar epochs válidos (con estadio)
+            for epoch_idx, (epoch, stage, epoch_time) in enumerate(
+                zip(epochs, stages, epochs_times)
+            ):
+                if stage is None or stage not in STAGE_ORDER:
+                    continue
+
+                all_epochs.append(epoch)
+                all_stages.append(stage)
+                all_metadata.append(
+                    {
+                        "subject_id": row["subject_id"],
+                        "subject_core": str(row["subject_id"])[:5]
+                        if len(str(row["subject_id"])) >= 5
+                        else str(row["subject_id"]),
+                        "session_idx": idx,
+                        "epoch_time_start": epoch_time,
+                        "epoch_index": epoch_idx,
+                    }
+                )
+
+            logging.info(
+                f"Extraídos {len([s for s in stages if s is not None])} epochs raw de {row['subject_id']}"
+            )
+        except Exception as e:
+            logging.exception(f"Error procesando {row['subject_id']}: {e}")
+            continue
+
+    if not all_epochs:
+        raise ValueError("No se pudieron extraer epochs raw de ninguna sesión")
+
+    # Convertir a arrays numpy
+    X_raw = np.array(all_epochs)  # (n_epochs, n_channels, n_samples_per_epoch)
+    y = np.array(all_stages)
+
+    # Crear DataFrame de metadata
+    metadata_df = pd.DataFrame(all_metadata)
+    metadata_df = metadata_df.sort_values(
+        ["subject_core", "subject_id", "epoch_time_start"]
+    ).reset_index(drop=True)
+
+    logging.info(
+        f"Dataset raw completo: {len(X_raw)} epochs de {metadata_df['subject_id'].nunique()} sujetos"
+    )
+    logging.info(f"Forma de X_raw: {X_raw.shape}")
+    logging.info(
+        f"Distribución de estadios:\n{pd.Series(y).value_counts().sort_index()}"
+    )
+
+    return X_raw, y, metadata_df
+
+
+def prepare_sequence_dataset(
+    features_df: pd.DataFrame,
+    sequence_length: int = 5,
+    stride: int = 1,
+) -> tuple[np.ndarray, np.ndarray, pd.DataFrame]:
+    """Prepara dataset de secuencias de features para modelos LSTM.
+
+    Esta función crea secuencias temporales de features de múltiples epochs
+    consecutivos para entrenar modelos LSTM que capturan dependencias temporales.
+
+    Parameters
+    ----------
+    features_df : pd.DataFrame
+        DataFrame con features extraídas (debe tener columnas temporales ordenadas)
+    sequence_length : int
+        Longitud de cada secuencia (número de epochs consecutivos)
+    stride : int
+        Paso entre secuencias (1 = secuencias solapadas, sequence_length = sin solapamiento)
+
+    Returns
+    -------
+    X_seq : np.ndarray
+        Array de forma (n_sequences, sequence_length, n_features) con secuencias de features
+    y : np.ndarray
+        Array con etiquetas del último epoch de cada secuencia
+    metadata_df : pd.DataFrame
+        DataFrame con metadata de cada secuencia
+    """
+    if not TF_AVAILABLE:
+        raise ImportError(
+            "TensorFlow no está disponible. Instala TensorFlow para usar modelos de deep learning."
+        )
+
+    # Identificar columnas de features
+    feature_cols = [
+        col
+        for col in features_df.columns
+        if col
+        not in [
+            "stage",
+            "subject_id",
+            "subject_core",
+            "session_idx",
+            "epoch_time_start",
+            "epoch_index",
+        ]
+    ]
+
+    # Ordenar por sujeto y tiempo para mantener orden temporal
+    features_sorted = features_df.sort_values(
+        ["subject_core", "subject_id", "epoch_time_start"]
+    ).reset_index(drop=True)
+
+    # Filtrar estadios válidos
+    valid_stages = set(STAGE_ORDER)
+    mask = features_sorted["stage"].isin(valid_stages)
+    features_sorted = features_sorted[mask].reset_index(drop=True)
+
+    # Crear secuencias respetando límites de sesión/sujeto
+    sequences = []
+    labels = []
+    metadata_list = []
+
+    # Agrupar por subject_id y session_idx para crear secuencias dentro de cada sesión
+    for (subject_id, session_idx), group in features_sorted.groupby(
+        ["subject_id", "session_idx"]
+    ):
+        group_features = group[feature_cols].values
+        group_stages = group["stage"].values
+        group_indices = group.index.values
+
+        # Crear secuencias dentro de esta sesión
+        for i in range(0, len(group_features) - sequence_length + 1, stride):
+            seq = group_features[i : i + sequence_length]
+            label = group_stages[i + sequence_length - 1]  # Etiqueta del último epoch
+
+            sequences.append(seq)
+            labels.append(label)
+
+            # Metadata del último epoch de la secuencia
+            metadata_list.append(
+                {
+                    "subject_id": subject_id,
+                    "subject_core": group.iloc[i + sequence_length - 1]["subject_core"],
+                    "session_idx": session_idx,
+                    "sequence_start_idx": group_indices[i],
+                    "sequence_end_idx": group_indices[i + sequence_length - 1],
+                }
+            )
+
+    if not sequences:
+        raise ValueError("No se pudieron crear secuencias válidas")
+
+    X_seq = np.array(sequences)  # (n_sequences, sequence_length, n_features)
+    y = np.array(labels)
+    metadata_df = pd.DataFrame(metadata_list)
+
+    logging.info(
+        f"Dataset de secuencias: {len(X_seq)} secuencias de longitud {sequence_length}"
+    )
+    logging.info(f"Forma de X_seq: {X_seq.shape}")
+    logging.info(
+        f"Distribución de estadios:\n{pd.Series(y).value_counts().sort_index()}"
+    )
+
+    return X_seq, y, metadata_df
+
+
+def build_cnn1d_model(
+    input_shape: tuple[int, int],
+    n_classes: int = 5,
+    n_filters: int = 64,
+    kernel_size: int = 3,
+    dropout_rate: float = 0.5,
+    learning_rate: float = 0.001,
+) -> keras.Model:
+    """Construye modelo CNN1D para clasificación de estadios de sueño.
+
+    Arquitectura:
+    - Capas convolucionales 1D para extraer patrones locales
+    - Pooling para reducir dimensionalidad
+    - Capas densas para clasificación final
+
+    Parameters
+    ----------
+    input_shape : tuple[int, int]
+        Forma de entrada (n_channels, n_samples_per_epoch)
+    n_classes : int
+        Número de clases (estadios de sueño)
+    n_filters : int
+        Número de filtros en las capas convolucionales
+    kernel_size : int
+        Tamaño del kernel convolucional
+    dropout_rate : float
+        Tasa de dropout para regularización
+    learning_rate : float
+        Tasa de aprendizaje del optimizador
+
+    Returns
+    -------
+    keras.Model
+        Modelo CNN1D compilado
+    """
+    if not TF_AVAILABLE:
+        raise ImportError("TensorFlow no está disponible.")
+
+    # Input: (n_channels, n_samples_per_epoch)
+    input_layer = keras.Input(shape=input_shape, name="input")
+
+    # Transponer para que las convoluciones operen sobre el tiempo
+    # De (n_channels, n_samples) a (n_samples, n_channels)
+    # Esto permite que la CNN aprenda patrones temporales
+    x = layers.Permute((2, 1))(input_layer)  # (n_samples, n_channels)
+
+    # Primera capa convolucional
+    x = layers.Conv1D(
+        filters=n_filters,
+        kernel_size=kernel_size,
+        activation="relu",
+        padding="same",
+        name="conv1d_1",
+    )(x)
+    x = layers.BatchNormalization(name="bn_1")(x)
+    x = layers.MaxPooling1D(pool_size=2, name="maxpool_1")(x)
+    x = layers.Dropout(dropout_rate, name="dropout_1")(x)
+
+    # Segunda capa convolucional
+    x = layers.Conv1D(
+        filters=n_filters * 2,
+        kernel_size=kernel_size,
+        activation="relu",
+        padding="same",
+        name="conv1d_2",
+    )(x)
+    x = layers.BatchNormalization(name="bn_2")(x)
+    x = layers.MaxPooling1D(pool_size=2, name="maxpool_2")(x)
+    x = layers.Dropout(dropout_rate, name="dropout_2")(x)
+
+    # Tercera capa convolucional
+    x = layers.Conv1D(
+        filters=n_filters * 4,
+        kernel_size=kernel_size,
+        activation="relu",
+        padding="same",
+        name="conv1d_3",
+    )(x)
+    x = layers.BatchNormalization(name="bn_3")(x)
+    x = layers.GlobalAveragePooling1D(name="global_avg_pool")(x)
+
+    # Capas densas para clasificación
+    x = layers.Dense(128, activation="relu", name="dense_1")(x)
+    x = layers.Dropout(dropout_rate, name="dropout_3")(x)
+    x = layers.Dense(64, activation="relu", name="dense_2")(x)
+    x = layers.Dropout(dropout_rate, name="dropout_4")(x)
+
+    # Capa de salida
+    output_layer = layers.Dense(n_classes, activation="softmax", name="output")(x)
+
+    model = keras.Model(
+        inputs=input_layer, outputs=output_layer, name="CNN1D_SleepStaging"
+    )
+
+    # Compilar modelo
+    model.compile(
+        optimizer=keras.optimizers.Adam(learning_rate=learning_rate),
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"],
+    )
+
+    return model
+
+
+def build_lstm_model(
+    input_shape: tuple[int, int],
+    n_classes: int = 5,
+    lstm_units: int = 128,
+    dropout_rate: float = 0.5,
+    learning_rate: float = 0.001,
+) -> keras.Model:
+    """Construye modelo LSTM para clasificación de estadios de sueño.
+
+    Arquitectura:
+    - Capas LSTM para capturar dependencias temporales
+    - Capas densas para clasificación final
+
+    Parameters
+    ----------
+    input_shape : tuple[int, int]
+        Forma de entrada (sequence_length, n_features)
+    n_classes : int
+        Número de clases (estadios de sueño)
+    lstm_units : int
+        Número de unidades LSTM
+    dropout_rate : float
+        Tasa de dropout para regularización
+    learning_rate : float
+        Tasa de aprendizaje del optimizador
+
+    Returns
+    -------
+    keras.Model
+        Modelo LSTM compilado
+    """
+    if not TF_AVAILABLE:
+        raise ImportError("TensorFlow no está disponible.")
+
+    # Input: (sequence_length, n_features)
+    input_layer = keras.Input(shape=input_shape, name="input")
+
+    # Primera capa LSTM (retorna secuencias completas)
+    x = layers.LSTM(
+        lstm_units,
+        return_sequences=True,
+        dropout=dropout_rate,
+        recurrent_dropout=dropout_rate,
+        name="lstm_1",
+    )(input_layer)
+    x = layers.BatchNormalization(name="bn_1")(x)
+
+    # Segunda capa LSTM (retorna solo el último estado)
+    x = layers.LSTM(
+        lstm_units // 2,
+        return_sequences=False,
+        dropout=dropout_rate,
+        recurrent_dropout=dropout_rate,
+        name="lstm_2",
+    )(x)
+    x = layers.BatchNormalization(name="bn_2")(x)
+
+    # Capas densas para clasificación
+    x = layers.Dense(128, activation="relu", name="dense_1")(x)
+    x = layers.Dropout(dropout_rate, name="dropout_1")(x)
+    x = layers.Dense(64, activation="relu", name="dense_2")(x)
+    x = layers.Dropout(dropout_rate, name="dropout_2")(x)
+
+    # Capa de salida
+    output_layer = layers.Dense(n_classes, activation="softmax", name="output")(x)
+
+    model = keras.Model(
+        inputs=input_layer, outputs=output_layer, name="LSTM_SleepStaging"
+    )
+
+    # Compilar modelo
+    model.compile(
+        optimizer=keras.optimizers.Adam(learning_rate=learning_rate),
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"],
+    )
+
+    return model
 
 
 def prepare_train_test_split(
@@ -427,6 +896,7 @@ def train_xgboost(
     learning_rate: float = 0.1,
     random_state: int = 42,
     n_jobs: int = -1,
+    scale_pos_weight: Optional[float] = None,
 ) -> xgb.XGBClassifier:
     """Entrena un modelo XGBoost.
 
@@ -446,6 +916,9 @@ def train_xgboost(
         Semilla aleatoria
     n_jobs : int
         Número de jobs paralelos
+    scale_pos_weight : float, optional
+        Controla el balance de clases positivas. Si None, se calcula automáticamente
+        para balancear clases desbalanceadas (similar a class_weight='balanced' en RF).
 
     Returns
     -------
@@ -463,13 +936,42 @@ def train_xgboost(
     logging.info("Datos de entrenamiento:")
     logging.info(f"  - Muestras: {len(X_train)}")
     logging.info(f"  - Features: {X_train.shape[1]}")
-    logging.info(f"  - Distribución de clases:\n{y_train.value_counts().sort_index()}")
+    class_counts = y_train.value_counts().sort_index()
+    logging.info(f"  - Distribución de clases:\n{class_counts}")
     logging.info("Codificando etiquetas...")
 
     # Codificar etiquetas
     le = LabelEncoder()
     y_train_encoded = le.fit_transform(y_train)
     logging.info(f"Etiquetas codificadas. Clases: {le.classes_}")
+
+    # Calcular sample_weight para balancear clases (similar a class_weight='balanced')
+    # XGBoost no tiene class_weight, pero podemos usar sample_weight
+    if scale_pos_weight is None:
+        # Calcular pesos para balancear clases automáticamente
+        # Para clasificación multiclase, XGBoost usa sample_weight en lugar de scale_pos_weight
+        # scale_pos_weight es solo para clasificación binaria
+        # Para multiclase, calculamos sample_weight basado en frecuencia inversa
+        class_weights = {}
+        total_samples = len(y_train_encoded)
+        n_classes = len(le.classes_)
+
+        for class_idx, class_name in enumerate(le.classes_):
+            class_count = class_counts.get(class_name, 0)
+            if class_count > 0:
+                # Peso inversamente proporcional a la frecuencia
+                class_weights[class_idx] = total_samples / (n_classes * class_count)
+            else:
+                class_weights[class_idx] = 1.0
+
+        sample_weight = np.array([class_weights[y] for y in y_train_encoded])
+        logging.info("  - Usando sample_weight para balancear clases automáticamente")
+        logging.info(
+            f"  - Pesos por clase: {dict(zip(le.classes_, [class_weights[i] for i in range(len(le.classes_))]))}"
+        )
+    else:
+        sample_weight = None
+        logging.info(f"  - scale_pos_weight: {scale_pos_weight} (solo para binaria)")
 
     logging.info("Iniciando entrenamiento...")
     model = xgb.XGBClassifier(
@@ -481,11 +983,342 @@ def train_xgboost(
         eval_metric="mlogloss",
     )
 
-    model.fit(X_train, y_train_encoded)
+    if sample_weight is not None:
+        model.fit(X_train, y_train_encoded, sample_weight=sample_weight)
+    else:
+        model.fit(X_train, y_train_encoded)
+
+    # Guardar LabelEncoder y clases originales para decodificación
+    model.label_encoder_ = le
     model.classes_ = le.classes_  # Guardar clases originales
 
     logging.info(
         f"✓ Entrenamiento completado: XGBoost entrenado con {len(X_train)} muestras"
+    )
+    logging.info("=" * 60)
+
+    return model
+
+
+def train_cnn1d(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_val: Optional[np.ndarray] = None,
+    y_val: Optional[np.ndarray] = None,
+    n_filters: int = 64,
+    kernel_size: int = 3,
+    dropout_rate: float = 0.5,
+    learning_rate: float = 0.001,
+    batch_size: int = 32,
+    epochs: int = 50,
+    verbose: int = 1,
+    class_weight: Optional[dict] = None,
+) -> keras.Model:
+    """Entrena un modelo CNN1D.
+
+    Parameters
+    ----------
+    X_train : np.ndarray
+        Señales raw de entrenamiento de forma (n_samples, n_channels, n_samples_per_epoch)
+    y_train : np.ndarray
+        Etiquetas de entrenamiento (strings: W, N1, N2, N3, REM)
+    X_val : np.ndarray, optional
+        Señales raw de validación
+    y_val : np.ndarray, optional
+        Etiquetas de validación
+    n_filters : int
+        Número de filtros en las capas convolucionales
+    kernel_size : int
+        Tamaño del kernel convolucional
+    dropout_rate : float
+        Tasa de dropout
+    learning_rate : float
+        Tasa de aprendizaje
+    batch_size : int
+        Tamaño del batch
+    epochs : int
+        Número de épocas
+    verbose : int
+        Verbosidad (0=silencioso, 1=barra de progreso, 2=una línea por época)
+    class_weight : dict, optional
+        Pesos por clase para balancear el dataset
+
+    Returns
+    -------
+    keras.Model
+        Modelo CNN1D entrenado
+    """
+    if not TF_AVAILABLE:
+        raise ImportError("TensorFlow no está disponible.")
+
+    logging.info("=" * 60)
+    logging.info("ETAPA: ENTRENAMIENTO - CNN1D")
+    logging.info("=" * 60)
+    logging.info("Configuración del modelo:")
+    logging.info(f"  - Filtros: {n_filters}")
+    logging.info(f"  - Kernel size: {kernel_size}")
+    logging.info(f"  - Dropout rate: {dropout_rate}")
+    logging.info(f"  - Learning rate: {learning_rate}")
+    logging.info(f"  - Batch size: {batch_size}")
+    logging.info(f"  - Epochs: {epochs}")
+    logging.info("Datos de entrenamiento:")
+    logging.info(f"  - Muestras: {len(X_train)}")
+    logging.info(f"  - Forma de entrada: {X_train.shape[1:]}")
+    logging.info(
+        f"  - Distribución de clases:\n{pd.Series(y_train).value_counts().sort_index()}"
+    )
+
+    # Codificar etiquetas
+    le = LabelEncoder()
+    y_train_encoded = le.fit_transform(y_train)
+    n_classes = len(le.classes_)
+
+    # Normalizar señales (por canal)
+    # Normalizar cada canal independientemente
+    # Guardar estadísticas de normalización para usar en test
+    X_train_norm = np.zeros_like(X_train)
+    channel_means = []
+    channel_stds = []
+    for ch_idx in range(X_train.shape[1]):
+        ch_data = X_train[:, ch_idx, :]
+        mean = np.mean(ch_data)
+        std = np.std(ch_data)
+        channel_means.append(mean)
+        channel_stds.append(std)
+        if std > 0:
+            X_train_norm[:, ch_idx, :] = (ch_data - mean) / std
+        else:
+            X_train_norm[:, ch_idx, :] = ch_data
+
+    # Construir modelo
+    input_shape = (X_train.shape[1], X_train.shape[2])
+    model = build_cnn1d_model(
+        input_shape=input_shape,
+        n_classes=n_classes,
+        n_filters=n_filters,
+        kernel_size=kernel_size,
+        dropout_rate=dropout_rate,
+        learning_rate=learning_rate,
+    )
+
+    # Guardar LabelEncoder y estadísticas de normalización en el modelo
+    model.label_encoder_ = le
+    model.classes_ = le.classes_
+    model.channel_means_ = np.array(channel_means)
+    model.channel_stds_ = np.array(channel_stds)
+
+    # Preparar datos de validación si existen
+    validation_data = None
+    if X_val is not None and y_val is not None:
+        y_val_encoded = le.transform(y_val)
+        X_val_norm = np.zeros_like(X_val)
+        # Usar estadísticas de train guardadas para normalizar val
+        for ch_idx in range(X_val.shape[1]):
+            ch_data = X_val[:, ch_idx, :]
+            mean = model.channel_means_[ch_idx]
+            std = model.channel_stds_[ch_idx]
+            if std > 0:
+                X_val_norm[:, ch_idx, :] = (ch_data - mean) / std
+            else:
+                X_val_norm[:, ch_idx, :] = ch_data
+        validation_data = (X_val_norm, y_val_encoded)
+
+    # Calcular class_weight si no se proporciona
+    if class_weight is None:
+        from sklearn.utils.class_weight import compute_class_weight
+
+        class_weights = compute_class_weight(
+            "balanced", classes=np.unique(y_train_encoded), y=y_train_encoded
+        )
+        class_weight = dict(enumerate(class_weights))
+        logging.info(f"  - Pesos de clases calculados: {class_weight}")
+
+    # Callbacks
+    callbacks = [
+        keras.callbacks.EarlyStopping(
+            monitor="val_loss" if validation_data else "loss",
+            patience=10,
+            restore_best_weights=True,
+            verbose=1,
+        ),
+        keras.callbacks.ReduceLROnPlateau(
+            monitor="val_loss" if validation_data else "loss",
+            factor=0.5,
+            patience=5,
+            min_lr=1e-6,
+            verbose=1,
+        ),
+    ]
+
+    logging.info("Iniciando entrenamiento...")
+    history = model.fit(
+        X_train_norm,
+        y_train_encoded,
+        batch_size=batch_size,
+        epochs=epochs,
+        validation_data=validation_data,
+        class_weight=class_weight,
+        callbacks=callbacks,
+        verbose=verbose,
+    )
+
+    # Guardar historial de entrenamiento en el modelo para análisis posterior
+    model.history_ = history.history
+
+    logging.info(
+        f"✓ Entrenamiento completado: CNN1D entrenado con {len(X_train)} muestras"
+    )
+    logging.info("=" * 60)
+
+    return model
+
+
+def train_lstm(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_val: Optional[np.ndarray] = None,
+    y_val: Optional[np.ndarray] = None,
+    lstm_units: int = 128,
+    dropout_rate: float = 0.5,
+    learning_rate: float = 0.001,
+    batch_size: int = 32,
+    epochs: int = 50,
+    verbose: int = 1,
+    class_weight: Optional[dict] = None,
+) -> keras.Model:
+    """Entrena un modelo LSTM.
+
+    Parameters
+    ----------
+    X_train : np.ndarray
+        Secuencias de features de entrenamiento de forma (n_sequences, sequence_length, n_features)
+    y_train : np.ndarray
+        Etiquetas de entrenamiento (strings: W, N1, N2, N3, REM)
+    X_val : np.ndarray, optional
+        Secuencias de features de validación
+    y_val : np.ndarray, optional
+        Etiquetas de validación
+    lstm_units : int
+        Número de unidades LSTM
+    dropout_rate : float
+        Tasa de dropout
+    learning_rate : float
+        Tasa de aprendizaje
+    batch_size : int
+        Tamaño del batch
+    epochs : int
+        Número de épocas
+    verbose : int
+        Verbosidad
+    class_weight : dict, optional
+        Pesos por clase para balancear el dataset
+
+    Returns
+    -------
+    keras.Model
+        Modelo LSTM entrenado
+    """
+    if not TF_AVAILABLE:
+        raise ImportError("TensorFlow no está disponible.")
+
+    logging.info("=" * 60)
+    logging.info("ETAPA: ENTRENAMIENTO - LSTM")
+    logging.info("=" * 60)
+    logging.info("Configuración del modelo:")
+    logging.info(f"  - LSTM units: {lstm_units}")
+    logging.info(f"  - Dropout rate: {dropout_rate}")
+    logging.info(f"  - Learning rate: {learning_rate}")
+    logging.info(f"  - Batch size: {batch_size}")
+    logging.info(f"  - Epochs: {epochs}")
+    logging.info("Datos de entrenamiento:")
+    logging.info(f"  - Secuencias: {len(X_train)}")
+    logging.info(f"  - Forma de entrada: {X_train.shape[1:]}")
+    logging.info(
+        f"  - Distribución de clases:\n{pd.Series(y_train).value_counts().sort_index()}"
+    )
+
+    # Codificar etiquetas
+    le = LabelEncoder()
+    y_train_encoded = le.fit_transform(y_train)
+    n_classes = len(le.classes_)
+
+    # Normalizar features (usar StandardScaler)
+    scaler = StandardScaler()
+    # Reshape para normalizar: (n_sequences * sequence_length, n_features)
+    n_sequences, sequence_length, n_features = X_train.shape
+    X_train_reshaped = X_train.reshape(-1, n_features)
+    X_train_scaled = scaler.fit_transform(X_train_reshaped)
+    X_train_norm = X_train_scaled.reshape(n_sequences, sequence_length, n_features)
+
+    # Construir modelo
+    input_shape = (sequence_length, n_features)
+    model = build_lstm_model(
+        input_shape=input_shape,
+        n_classes=n_classes,
+        lstm_units=lstm_units,
+        dropout_rate=dropout_rate,
+        learning_rate=learning_rate,
+    )
+
+    # Guardar LabelEncoder y scaler en el modelo
+    model.label_encoder_ = le
+    model.classes_ = le.classes_
+    model.scaler_ = scaler
+
+    # Preparar datos de validación si existen
+    validation_data = None
+    if X_val is not None and y_val is not None:
+        y_val_encoded = le.transform(y_val)
+        n_val_sequences = X_val.shape[0]
+        X_val_reshaped = X_val.reshape(-1, n_features)
+        X_val_scaled = scaler.transform(X_val_reshaped)
+        X_val_norm = X_val_scaled.reshape(n_val_sequences, sequence_length, n_features)
+        validation_data = (X_val_norm, y_val_encoded)
+
+    # Calcular class_weight si no se proporciona
+    if class_weight is None:
+        from sklearn.utils.class_weight import compute_class_weight
+
+        class_weights = compute_class_weight(
+            "balanced", classes=np.unique(y_train_encoded), y=y_train_encoded
+        )
+        class_weight = dict(enumerate(class_weights))
+        logging.info(f"  - Pesos de clases calculados: {class_weight}")
+
+    # Callbacks
+    callbacks = [
+        keras.callbacks.EarlyStopping(
+            monitor="val_loss" if validation_data else "loss",
+            patience=10,
+            restore_best_weights=True,
+            verbose=1,
+        ),
+        keras.callbacks.ReduceLROnPlateau(
+            monitor="val_loss" if validation_data else "loss",
+            factor=0.5,
+            patience=5,
+            min_lr=1e-6,
+            verbose=1,
+        ),
+    ]
+
+    logging.info("Iniciando entrenamiento...")
+    history = model.fit(
+        X_train_norm,
+        y_train_encoded,
+        batch_size=batch_size,
+        epochs=epochs,
+        validation_data=validation_data,
+        class_weight=class_weight,
+        callbacks=callbacks,
+        verbose=verbose,
+    )
+
+    # Guardar historial de entrenamiento en el modelo para análisis posterior
+    model.history_ = history.history
+
+    logging.info(
+        f"✓ Entrenamiento completado: LSTM entrenado con {len(X_train)} secuencias"
     )
     logging.info("=" * 60)
 
@@ -574,7 +1407,28 @@ def cross_validate_model(
         if is_xgboost:
             le_fold = LabelEncoder()
             y_train_fold_encoded = le_fold.fit_transform(y_train_fold)
-            model_fold.fit(X_train_fold, y_train_fold_encoded)
+
+            # Calcular sample_weight para balancear clases
+            class_counts_fold = y_train_fold.value_counts()
+            total_samples_fold = len(y_train_fold_encoded)
+            n_classes_fold = len(le_fold.classes_)
+            class_weights_fold = {}
+            for class_idx, class_name in enumerate(le_fold.classes_):
+                class_count = class_counts_fold.get(class_name, 0)
+                if class_count > 0:
+                    class_weights_fold[class_idx] = total_samples_fold / (
+                        n_classes_fold * class_count
+                    )
+                else:
+                    class_weights_fold[class_idx] = 1.0
+            sample_weight_fold = np.array(
+                [class_weights_fold[y] for y in y_train_fold_encoded]
+            )
+
+            model_fold.fit(
+                X_train_fold, y_train_fold_encoded, sample_weight=sample_weight_fold
+            )
+            model_fold.label_encoder_ = le_fold
             model_fold.classes_ = le_fold.classes_  # Guardar clases para decodificación
         else:
             model_fold.fit(X_train_fold, y_train_fold)
@@ -590,20 +1444,24 @@ def cross_validate_model(
             and len(y_pred_fold) > 0
             and isinstance(y_pred_fold[0], (int, np.integer))
         ):
-            # Validar que los índices estén en rango válido
-            if np.any(y_pred_fold < 0) or np.any(
-                y_pred_fold >= len(model_fold.classes_)
-            ):
-                invalid_indices = np.where(
-                    (y_pred_fold < 0) | (y_pred_fold >= len(model_fold.classes_))
-                )[0]
-                logging.warning(
-                    f"Fold {fold_idx + 1}: {len(invalid_indices)} predicciones con índices fuera de rango. "
-                    f"Rango válido: [0, {len(model_fold.classes_)-1}], encontrados: {np.unique(y_pred_fold[invalid_indices])}"
-                )
-                # Clampear índices al rango válido
-                y_pred_fold = np.clip(y_pred_fold, 0, len(model_fold.classes_) - 1)
-            y_pred_fold = model_fold.classes_[y_pred_fold]
+            # Usar label_encoder_ si está disponible, sino usar classes_
+            if hasattr(model_fold, "label_encoder_"):
+                y_pred_fold = model_fold.label_encoder_.inverse_transform(y_pred_fold)
+            else:
+                # Validar que los índices estén en rango válido
+                if np.any(y_pred_fold < 0) or np.any(
+                    y_pred_fold >= len(model_fold.classes_)
+                ):
+                    invalid_indices = np.where(
+                        (y_pred_fold < 0) | (y_pred_fold >= len(model_fold.classes_))
+                    )[0]
+                    logging.warning(
+                        f"Fold {fold_idx + 1}: {len(invalid_indices)} predicciones con índices fuera de rango. "
+                        f"Rango válido: [0, {len(model_fold.classes_)-1}], encontrados: {np.unique(y_pred_fold[invalid_indices])}"
+                    )
+                    # Clampear índices al rango válido
+                    y_pred_fold = np.clip(y_pred_fold, 0, len(model_fold.classes_) - 1)
+                y_pred_fold = model_fold.classes_[y_pred_fold]
 
         logging.info("  Calculando métricas...")
         # Calcular métricas
@@ -648,8 +1506,8 @@ def cross_validate_model(
 
 def evaluate_model(
     model,
-    X_test: pd.DataFrame,
-    y_test: pd.Series,
+    X_test: pd.DataFrame | np.ndarray,
+    y_test: pd.Series | np.ndarray,
     stage_order: Optional[list[str]] = None,
     dataset_name: str = "TEST",
 ) -> dict:
@@ -658,10 +1516,10 @@ def evaluate_model(
     Parameters
     ----------
     model
-        Modelo entrenado (sklearn o XGBoost)
-    X_test : pd.DataFrame
-        Features de test
-    y_test : pd.Series
+        Modelo entrenado (sklearn, XGBoost, o Keras)
+    X_test : pd.DataFrame | np.ndarray
+        Features de test (DataFrame para modelos tradicionales, array para DL)
+    y_test : pd.Series | np.ndarray
         Etiquetas de test
     stage_order : list[str], optional
         Orden de los estadios para el reporte
@@ -676,33 +1534,130 @@ def evaluate_model(
     logging.info("=" * 60)
     logging.info(f"ETAPA: EVALUACIÓN EN {dataset_name}")
     logging.info("=" * 60)
-    logging.info(f"Muestras de {dataset_name.lower()}: {len(X_test)}")
-    logging.info(
-        f"Distribución de clases en {dataset_name.lower()}:\n{y_test.value_counts().sort_index()}"
-    )
+    logging.info(f"Muestras de {dataset_name.lower()}: {len(y_test)}")
+    if isinstance(y_test, pd.Series):
+        logging.info(
+            f"Distribución de clases en {dataset_name.lower()}:\n{y_test.value_counts().sort_index()}"
+        )
+    else:
+        logging.info(
+            f"Distribución de clases en {dataset_name.lower()}:\n{pd.Series(y_test).value_counts().sort_index()}"
+        )
     logging.info("Generando predicciones...")
 
-    y_pred = model.predict(X_test)
+    # Detectar si es modelo de Keras
+    is_keras_model = TF_AVAILABLE and isinstance(model, keras.Model)
 
-    # Si es XGBoost, puede necesitar decodificación
-    if (
-        hasattr(model, "classes_")
-        and len(y_pred) > 0
-        and isinstance(y_pred[0], (int, np.integer))
-    ):
-        logging.info("Decodificando predicciones (XGBoost)...")
-        # Validar que los índices estén en rango válido
-        if np.any(y_pred < 0) or np.any(y_pred >= len(model.classes_)):
-            invalid_indices = np.where((y_pred < 0) | (y_pred >= len(model.classes_)))[
-                0
-            ]
-            logging.warning(
-                f"Advertencia: {len(invalid_indices)} predicciones con índices fuera de rango. "
-                f"Rango válido: [0, {len(model.classes_)-1}], encontrados: {np.unique(y_pred[invalid_indices])}"
+    if is_keras_model:
+        # Modelo de Keras: necesita normalización y decodificación
+        logging.info("Procesando predicciones de modelo Keras...")
+
+        # Normalizar datos de test según el tipo de modelo
+        if hasattr(model, "scaler_"):
+            # LSTM: usar scaler guardado
+            n_sequences, sequence_length, n_features = X_test.shape
+
+            # Validar dimensiones
+            if n_features != model.scaler_.n_features_in_:
+                raise ValueError(
+                    f"Dimensiones no coinciden: X_test tiene {n_features} features, "
+                    f"pero el scaler espera {model.scaler_.n_features_in_} features"
+                )
+
+            X_test_reshaped = X_test.reshape(-1, n_features)
+            X_test_scaled = model.scaler_.transform(X_test_reshaped)
+            X_test_norm = X_test_scaled.reshape(
+                n_sequences, sequence_length, n_features
             )
-            # Clampear índices al rango válido
-            y_pred = np.clip(y_pred, 0, len(model.classes_) - 1)
-        y_pred = model.classes_[y_pred]
+
+            # Logging de validación (solo en modo debug)
+            if logging.getLogger().level == logging.DEBUG:
+                logging.debug(
+                    f"Normalización LSTM usando scaler guardado: "
+                    f"{n_features} features, {n_sequences} secuencias"
+                )
+        else:
+            # CNN1D: normalizar por canal usando estadísticas de train guardadas
+            if hasattr(model, "channel_means_") and hasattr(model, "channel_stds_"):
+                # Validar que las dimensiones coinciden
+                if X_test.shape[1] != len(model.channel_means_):
+                    raise ValueError(
+                        f"Dimensiones no coinciden: X_test tiene {X_test.shape[1]} canales, "
+                        f"pero el modelo espera {len(model.channel_means_)} canales"
+                    )
+
+                # Usar estadísticas de train guardadas
+                X_test_norm = np.zeros_like(X_test)
+                for ch_idx in range(X_test.shape[1]):
+                    ch_data = X_test[:, ch_idx, :]
+                    mean = model.channel_means_[ch_idx]
+                    std = model.channel_stds_[ch_idx]
+                    if std > 0:
+                        X_test_norm[:, ch_idx, :] = (ch_data - mean) / std
+                    else:
+                        X_test_norm[:, ch_idx, :] = ch_data
+
+                # Logging de validación (solo en modo debug)
+                if logging.getLogger().level == logging.DEBUG:
+                    logging.debug("Normalización CNN1D usando estadísticas de train:")
+                    for ch_idx in range(X_test.shape[1]):
+                        logging.debug(
+                            f"  Canal {ch_idx}: mean={model.channel_means_[ch_idx]:.4f}, "
+                            f"std={model.channel_stds_[ch_idx]:.4f}"
+                        )
+            else:
+                # Fallback: normalizar con estadísticas de test (no ideal, pero mejor que error)
+                logging.warning(
+                    "No se encontraron estadísticas de normalización guardadas. "
+                    "Usando estadísticas de test (puede causar data leakage)."
+                )
+                X_test_norm = np.zeros_like(X_test)
+                for ch_idx in range(X_test.shape[1]):
+                    ch_data = X_test[:, ch_idx, :]
+                    mean = np.mean(ch_data)
+                    std = np.std(ch_data)
+                    if std > 0:
+                        X_test_norm[:, ch_idx, :] = (ch_data - mean) / std
+                    else:
+                        X_test_norm[:, ch_idx, :] = ch_data
+
+        # Predecir (retorna probabilidades)
+        y_pred_proba = model.predict(X_test_norm, verbose=0)
+        # Tomar clase con mayor probabilidad
+        y_pred_encoded = np.argmax(y_pred_proba, axis=1)
+
+        # Decodificar usando label_encoder
+        if hasattr(model, "label_encoder_"):
+            y_pred = model.label_encoder_.inverse_transform(y_pred_encoded)
+        else:
+            y_pred = model.classes_[y_pred_encoded]
+    else:
+        # Modelo tradicional (sklearn/XGBoost)
+        y_pred = model.predict(X_test)
+
+        # Si es XGBoost, puede necesitar decodificación
+        if (
+            hasattr(model, "classes_")
+            and len(y_pred) > 0
+            and isinstance(y_pred[0], (int, np.integer))
+        ):
+            logging.info("Decodificando predicciones (XGBoost)...")
+            # Usar label_encoder_ si está disponible, sino usar classes_
+            if hasattr(model, "label_encoder_"):
+                y_pred = model.label_encoder_.inverse_transform(y_pred)
+            else:
+                # Validar que los índices estén en rango válido
+                if np.any(y_pred < 0) or np.any(y_pred >= len(model.classes_)):
+                    invalid_indices = np.where(
+                        (y_pred < 0) | (y_pred >= len(model.classes_))
+                    )[0]
+                    logging.warning(
+                        f"Advertencia: {len(invalid_indices)} predicciones con índices fuera de rango. "
+                        f"Rango válido: [0, {len(model.classes_)-1}], encontrados: {np.unique(y_pred[invalid_indices])}"
+                    )
+                    # Clampear índices al rango válido
+                    y_pred = np.clip(y_pred, 0, len(model.classes_) - 1)
+                y_pred = model.classes_[y_pred]
 
     logging.info("Calculando métricas de evaluación...")
     accuracy = accuracy_score(y_test, y_pred)
@@ -858,13 +1813,73 @@ def save_model(model, path: Path | str) -> None:
     Parameters
     ----------
     model
-        Modelo entrenado
+        Modelo entrenado (sklearn, XGBoost, o Keras)
     path : Path | str
         Ruta donde guardar el modelo
     """
-    with open(path, "wb") as f:
-        pickle.dump(model, f)
-    logging.info(f"Modelo guardado en {path}")
+    path = Path(path)
+
+    # Detectar si es modelo de Keras
+    is_keras_model = TF_AVAILABLE and isinstance(model, keras.Model)
+
+    if is_keras_model:
+        # Guardar modelo de Keras (guarda arquitectura, pesos y optimizador)
+        model.save(str(path))
+
+        # Guardar atributos personalizados por separado (Keras no los guarda automáticamente)
+        custom_attrs = {}
+        if hasattr(model, "label_encoder_"):
+            # LabelEncoder no es serializable directamente, guardar clases y mapeo
+            custom_attrs["label_encoder_classes_"] = (
+                model.label_encoder_.classes_.tolist()
+            )
+        if hasattr(model, "classes_"):
+            custom_attrs["classes_"] = (
+                model.classes_.tolist()
+                if isinstance(model.classes_, np.ndarray)
+                else list(model.classes_)
+            )
+        if hasattr(model, "channel_means_"):
+            custom_attrs["channel_means_"] = model.channel_means_.tolist()
+        if hasattr(model, "channel_stds_"):
+            custom_attrs["channel_stds_"] = model.channel_stds_.tolist()
+        if hasattr(model, "scaler_"):
+            # StandardScaler necesita guardarse con pickle
+            scaler_path = path.parent / f"{path.name}_scaler.pkl"
+            with open(scaler_path, "wb") as f:
+                pickle.dump(model.scaler_, f)
+            custom_attrs["scaler_path"] = str(scaler_path)
+        if hasattr(model, "history_"):
+            # Guardar historial de entrenamiento
+            # Convertir valores numpy a tipos nativos de Python para serialización JSON
+            history_serializable = {}
+            for key, values in model.history_.items():
+                if isinstance(values, (list, np.ndarray)):
+                    history_serializable[key] = [
+                        float(v) if isinstance(v, (np.floating, np.integer)) else v
+                        for v in values
+                    ]
+                else:
+                    history_serializable[key] = values
+
+            history_path = path.parent / f"{path.name}_history.json"
+            with open(history_path, "w") as f:
+                json.dump(history_serializable, f, indent=2)
+            custom_attrs["history_path"] = str(history_path)
+
+        # Guardar atributos personalizados en JSON si hay alguno
+        if custom_attrs:
+            custom_attrs_path = path.parent / f"{path.name}_custom_attrs.json"
+            with open(custom_attrs_path, "w") as f:
+                json.dump(custom_attrs, f, indent=2)
+            logging.info(f"Atributos personalizados guardados en {custom_attrs_path}")
+
+        logging.info(f"Modelo Keras guardado en {path}")
+    else:
+        # Guardar modelo tradicional con pickle
+        with open(path, "wb") as f:
+            pickle.dump(model, f)
+        logging.info(f"Modelo guardado en {path}")
 
 
 def load_model(path: Path | str):
@@ -879,6 +1894,66 @@ def load_model(path: Path | str):
     -------
     Modelo cargado
     """
+    path = Path(path)
+
+    # Intentar cargar como modelo de Keras primero
+    if TF_AVAILABLE and path.is_dir():
+        # Los modelos de Keras se guardan como directorios
+        try:
+            model = keras.models.load_model(str(path))
+
+            # Cargar atributos personalizados si existen
+            custom_attrs_path = path.parent / f"{path.name}_custom_attrs.json"
+            if custom_attrs_path.exists():
+                with open(custom_attrs_path, "r") as f:
+                    custom_attrs = json.load(f)
+
+                # Restaurar LabelEncoder
+                if "label_encoder_classes_" in custom_attrs:
+                    le = LabelEncoder()
+                    le.classes_ = np.array(custom_attrs["label_encoder_classes_"])
+                    model.label_encoder_ = le
+
+                # Restaurar clases
+                if "classes_" in custom_attrs:
+                    model.classes_ = np.array(custom_attrs["classes_"])
+
+                # Restaurar estadísticas de normalización de CNN1D
+                if "channel_means_" in custom_attrs:
+                    model.channel_means_ = np.array(custom_attrs["channel_means_"])
+                if "channel_stds_" in custom_attrs:
+                    model.channel_stds_ = np.array(custom_attrs["channel_stds_"])
+
+                # Restaurar scaler de LSTM
+                if "scaler_path" in custom_attrs:
+                    scaler_path = Path(custom_attrs["scaler_path"])
+                    if scaler_path.exists():
+                        with open(scaler_path, "rb") as f:
+                            model.scaler_ = pickle.load(f)  # nosec B301
+                    else:
+                        logging.warning(
+                            f"Archivo de scaler no encontrado: {scaler_path}"
+                        )
+
+                # Restaurar historial de entrenamiento
+                if "history_path" in custom_attrs:
+                    history_path = Path(custom_attrs["history_path"])
+                    if history_path.exists():
+                        with open(history_path, "r") as f:
+                            model.history_ = json.load(f)
+                    else:
+                        logging.warning(
+                            f"Archivo de historial no encontrado: {history_path}"
+                        )
+
+            logging.info(f"Modelo Keras cargado desde {path}")
+            return model
+        except Exception as e:
+            logging.error(f"Error cargando modelo Keras desde {path}: {e}")
+            logging.info("Intentando cargar como modelo tradicional...")
+            # No hacer pass silencioso, dejar que intente cargar como modelo tradicional
+
+    # Cargar modelo tradicional con pickle
     with open(path, "rb") as f:
         model = pickle.load(f)  # nosec B301
     logging.info(f"Modelo cargado desde {path}")
@@ -1036,6 +2111,34 @@ def optimize_hyperparameters(
                         y_encoded = self.label_encoder_.transform(y)
                     # Guardar clases originales para decodificación
                     self.classes_ = self.label_encoder_.classes_
+
+                    # Calcular sample_weight para balancear clases automáticamente
+                    if "sample_weight" not in kwargs:
+                        import pandas as pd
+
+                        if hasattr(y, "value_counts"):
+                            class_counts = y.value_counts()
+                        else:
+                            y_series = pd.Series(y)
+                            class_counts = y_series.value_counts()
+
+                        total_samples = len(y_encoded)
+                        n_classes = len(self.label_encoder_.classes_)
+                        class_weights = {}
+                        for class_idx, class_name in enumerate(
+                            self.label_encoder_.classes_
+                        ):
+                            class_count = class_counts.get(class_name, 0)
+                            if class_count > 0:
+                                class_weights[class_idx] = total_samples / (
+                                    n_classes * class_count
+                                )
+                            else:
+                                class_weights[class_idx] = 1.0
+                        sample_weight = np.array(
+                            [class_weights[y_val] for y_val in y_encoded]
+                        )
+                        kwargs["sample_weight"] = sample_weight
                 else:
                     y_encoded = y
                 return super().fit(X, y_encoded, **kwargs)
@@ -1093,6 +2196,7 @@ def run_training_pipeline(
     epoch_length: float = 30.0,
     sfreq: Optional[float] = None,
     features_file: Optional[Path | str] = None,
+    sequence_length: int = 5,  # Para LSTM
     **model_kwargs,
 ) -> dict:
     """Ejecuta pipeline completo de entrenamiento y evaluación.
@@ -1102,7 +2206,7 @@ def run_training_pipeline(
     manifest_path : Path | str
         Ruta al manifest CSV (solo necesario si features_file no se proporciona)
     model_type : str
-        Tipo de modelo ('random_forest' o 'xgboost')
+        Tipo de modelo ('random_forest', 'xgboost', 'cnn1d', o 'lstm')
     output_dir : Path | str
         Directorio donde guardar el modelo
     test_size : float
@@ -1116,6 +2220,9 @@ def run_training_pipeline(
     features_file : Path | str, optional
         Ruta a archivo con features pre-extraídas (Parquet o CSV).
         Si se proporciona, se omite la extracción de features.
+        Requerido para LSTM, opcional para otros modelos.
+    sequence_length : int
+        Longitud de secuencias para LSTM (default: 5 epochs)
     **model_kwargs
         Argumentos adicionales para el modelo
 
@@ -1125,6 +2232,12 @@ def run_training_pipeline(
         Diccionario con métricas de evaluación
     """
     logging.info("Iniciando pipeline de entrenamiento")
+
+    # Validar que TensorFlow esté disponible para modelos de deep learning
+    if model_type in ["cnn1d", "lstm"] and not TF_AVAILABLE:
+        raise ImportError(
+            f"TensorFlow no está disponible. Instala TensorFlow para usar el modelo {model_type}."
+        )
 
     # Detectar contexto: primera corrida vs corrida avanzada
     output_dir_path = Path(output_dir)
@@ -1178,11 +2291,28 @@ def run_training_pipeline(
         val_size = 0.2
         logging.info(f"Validation size configurado automáticamente: {val_size}")
 
-    # 1. Preparar dataset (cargar features pre-extraídas o extraerlas)
+    # 1. Preparar dataset según el tipo de modelo
     logging.info("\n" + "=" * 60)
     logging.info("ETAPA 1: PREPARACIÓN DE DATOS")
     logging.info("=" * 60)
-    if features_file:
+
+    # Manejo especial para modelos de deep learning
+    if model_type == "cnn1d":
+        # CNN1D necesita señales raw
+        logging.info("Preparando datos raw para CNN1D...")
+        X_raw, y_raw, metadata_df = prepare_raw_epochs_dataset(
+            manifest_path, limit=limit, epoch_length=epoch_length, sfreq=sfreq
+        )
+        logging.info("✓ Datos raw preparados para CNN1D")
+        # Saltar al entrenamiento directo (manejo especial más abajo)
+        use_dl_pipeline = True
+    elif model_type == "lstm":
+        # LSTM necesita features en secuencias
+        if not features_file:
+            raise ValueError(
+                "LSTM requiere features pre-extraídas. "
+                "Proporciona --features-file con un archivo de features."
+            )
         logging.info(f"Cargando features desde {features_file}...")
         features_path = Path(features_file)
         if features_path.suffix == ".parquet":
@@ -1195,12 +2325,162 @@ def run_training_pipeline(
                 "Use .parquet o .csv"
             )
         logging.info(f"✓ Features cargadas: {len(features_df)} epochs")
-    else:
-        logging.info("Extrayendo features desde archivos raw...")
-        features_df = prepare_features_dataset(
-            manifest_path, limit=limit, epoch_length=epoch_length, sfreq=sfreq
+        logging.info("Creando secuencias para LSTM...")
+        X_seq, y_seq, metadata_df = prepare_sequence_dataset(
+            features_df, sequence_length=sequence_length
         )
-        logging.info("✓ Extracción de features completada")
+        logging.info("✓ Secuencias preparadas para LSTM")
+        use_dl_pipeline = True
+    else:
+        # Modelos tradicionales (random_forest, xgboost)
+        use_dl_pipeline = False
+
+    # Pipeline especial para modelos de deep learning
+    if use_dl_pipeline:
+        # Dividir datos respetando subject_core
+        logging.info("\n" + "=" * 60)
+        logging.info("ETAPA 2: DIVISIÓN DE DATOS (Deep Learning)")
+        logging.info("=" * 60)
+
+        if model_type == "cnn1d":
+            X_data, y_data = X_raw, y_raw
+        else:  # lstm
+            X_data, y_data = X_seq, y_seq
+
+        # Dividir por subject_core
+        subject_cores = metadata_df["subject_core"].unique()
+        n_cores = len(subject_cores)
+        np.random.seed(42)
+        shuffled_cores = np.random.permutation(subject_cores)
+
+        n_test_cores = max(1, int(n_cores * test_size))
+        n_val_cores = max(1, int(n_cores * val_size)) if val_size else 0
+
+        test_cores = set(shuffled_cores[:n_test_cores])
+        val_cores = (
+            set(shuffled_cores[n_test_cores : n_test_cores + n_val_cores])
+            if val_size
+            else set()
+        )
+        train_cores = set(shuffled_cores[n_test_cores + n_val_cores :])
+
+        train_mask = metadata_df["subject_core"].isin(train_cores)
+        test_mask = metadata_df["subject_core"].isin(test_cores)
+        val_mask = (
+            metadata_df["subject_core"].isin(val_cores)
+            if val_size
+            else pd.Series([False] * len(metadata_df))
+        )
+
+        X_train = X_data[train_mask.values]
+        y_train = y_data[train_mask.values]
+        X_test = X_data[test_mask.values]
+        y_test = y_data[test_mask.values]
+        X_val = X_data[val_mask.values] if val_size else None
+        y_val = y_data[val_mask.values] if val_size else None
+
+        logging.info(f"Train: {len(X_train)} muestras")
+        logging.info(f"Test: {len(X_test)} muestras")
+        if val_size:
+            logging.info(f"Val: {len(X_val)} muestras")
+
+        # Entrenar modelo
+        logging.info("\n" + "=" * 60)
+        logging.info("ETAPA 3: ENTRENAMIENTO DEL MODELO")
+        logging.info("=" * 60)
+
+        if model_type == "cnn1d":
+            model = train_cnn1d(
+                X_train,
+                y_train,
+                X_val,
+                y_val,
+                **{
+                    k: v
+                    for k, v in model_kwargs.items()
+                    if k
+                    not in [
+                        "cross_validate",
+                        "cv_folds",
+                        "save_metrics",
+                        "optimize",
+                        "n_iter_optimize",
+                        "cv_folds_optimize",
+                    ]
+                },
+            )
+        else:  # lstm
+            model = train_lstm(
+                X_train,
+                y_train,
+                X_val,
+                y_val,
+                **{
+                    k: v
+                    for k, v in model_kwargs.items()
+                    if k
+                    not in [
+                        "cross_validate",
+                        "cv_folds",
+                        "save_metrics",
+                        "optimize",
+                        "n_iter_optimize",
+                        "cv_folds_optimize",
+                    ]
+                },
+            )
+
+        # Evaluar en validación si existe
+        if val_size and X_val is not None:
+            logging.info("\n" + "=" * 60)
+            logging.info("ETAPA 4: EVALUACIÓN EN VALIDACIÓN")
+            logging.info("=" * 60)
+            val_metrics = evaluate_model(
+                model, X_val, y_val, stage_order=STAGE_ORDER, dataset_name="VALIDATION"
+            )
+            logging.info("Métricas de validación:")
+            logging.info(f"  Accuracy: {val_metrics['accuracy']:.4f}")
+            logging.info(f"  Cohen's Kappa: {val_metrics['kappa']:.4f}")
+            logging.info(f"  F1-score (macro): {val_metrics['f1_macro']:.4f}")
+
+        # Evaluar en test
+        logging.info("\n" + "=" * 60)
+        logging.info("ETAPA 5: EVALUACIÓN EN TEST")
+        logging.info("=" * 60)
+        metrics = evaluate_model(
+            model, X_test, y_test, stage_order=STAGE_ORDER, dataset_name="TEST"
+        )
+        print_evaluation_report(metrics, STAGE_ORDER)
+
+        # Guardar modelo
+        logging.info("\n" + "=" * 60)
+        logging.info("ETAPA FINAL: GUARDADO DE RESULTADOS")
+        logging.info("=" * 60)
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Para modelos de Keras, guardar como directorio
+        model_path = output_dir / f"{model_type}_model"
+        save_model(model, model_path)
+
+        # Guardar métricas
+        save_metrics_flag = model_kwargs.pop("save_metrics", True)
+        if save_metrics_flag:
+            metrics_path = output_dir / f"{model_type}_metrics.json"
+            save_metrics(metrics, metrics_path, model_type=model_type, **model_kwargs)
+
+        logging.info("\n" + "=" * 60)
+        logging.info("✓ PIPELINE COMPLETADO EXITOSAMENTE")
+        logging.info("=" * 60)
+        logging.info(f"Modelo guardado en: {model_path}")
+        if save_metrics_flag:
+            logging.info(f"Métricas guardadas en: {metrics_path}")
+        logging.info("=" * 60 + "\n")
+
+        return metrics
+
+    # Continuar con pipeline tradicional para modelos ML clásicos
+    # (el código de preparación de datos ya se ejecutó arriba para estos modelos)
 
     # 2. Separar features y etiquetas
     logging.info("\n" + "=" * 60)
@@ -1397,11 +2677,12 @@ def run_training_pipeline(
     logging.info(f"Guardando modelo en {model_path}...")
     save_model(model, model_path)
 
-    # Guardar feature names también
-    feature_names_path = output_dir / f"{model_type}_feature_names.pkl"
-    logging.info(f"Guardando nombres de features en {feature_names_path}...")
-    with open(feature_names_path, "wb") as f:
-        pickle.dump(feature_cols, f)
+    # Guardar feature names también (solo para modelos tradicionales)
+    if model_type not in ["cnn1d", "lstm"]:
+        feature_names_path = output_dir / f"{model_type}_feature_names.pkl"
+        logging.info(f"Guardando nombres de features en {feature_names_path}...")
+        with open(feature_names_path, "wb") as f:
+            pickle.dump(feature_cols, f)
 
     # Guardar métricas también (si no se desactivó explícitamente)
     save_metrics_flag = model_kwargs.pop("save_metrics", True)
@@ -1433,7 +2714,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--model-type",
-        choices=["random_forest", "xgboost"],
+        choices=["random_forest", "xgboost", "cnn1d", "lstm"],
         default="random_forest",
         help="Tipo de modelo a entrenar",
     )
@@ -1477,7 +2758,63 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Ruta a archivo con features pre-extraídas (Parquet o CSV). "
-        "Si se proporciona, se omite la extracción de features.",
+        "Si se proporciona, se omite la extracción de features. Requerido para LSTM.",
+    )
+    parser.add_argument(
+        "--sequence-length",
+        type=int,
+        default=5,
+        help="Longitud de secuencias para LSTM (número de epochs consecutivos, default: 5)",
+    )
+    # Parámetros específicos de Deep Learning
+    parser.add_argument(
+        "--n-filters",
+        type=int,
+        default=64,
+        help="Número de filtros para CNN1D (default: 64)",
+    )
+    parser.add_argument(
+        "--kernel-size",
+        type=int,
+        default=3,
+        help="Tamaño del kernel convolucional para CNN1D (default: 3)",
+    )
+    parser.add_argument(
+        "--lstm-units",
+        type=int,
+        default=128,
+        help="Número de unidades LSTM (default: 128)",
+    )
+    parser.add_argument(
+        "--dropout-rate",
+        type=float,
+        default=0.5,
+        help="Tasa de dropout para modelos de deep learning (default: 0.5)",
+    )
+    parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=0.001,
+        help="Tasa de aprendizaje para modelos de deep learning (default: 0.001)",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=32,
+        help="Tamaño del batch para modelos de deep learning (default: 32)",
+    )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=50,
+        help="Número de épocas para modelos de deep learning (default: 50)",
+    )
+    parser.add_argument(
+        "--verbose",
+        type=int,
+        default=1,
+        choices=[0, 1, 2],
+        help="Verbosidad para modelos de deep learning: 0=silencioso, 1=barra de progreso, 2=una línea por época (default: 1)",
     )
     # Parámetros específicos de Random Forest
     parser.add_argument(
@@ -1549,6 +2886,21 @@ def main() -> int:
         "cv_folds_optimize": args.cv_folds_optimize,
     }
 
+    # Agregar parámetros específicos de deep learning
+    if args.model_type in ["cnn1d", "lstm"]:
+        model_kwargs.update(
+            {
+                "n_filters": args.n_filters,
+                "kernel_size": args.kernel_size,
+                "lstm_units": args.lstm_units,
+                "dropout_rate": args.dropout_rate,
+                "learning_rate": args.learning_rate,
+                "batch_size": args.batch_size,
+                "epochs": args.epochs,
+                "verbose": args.verbose,
+            }
+        )
+
     try:
         run_training_pipeline(
             manifest_path=args.manifest,
@@ -1560,6 +2912,7 @@ def main() -> int:
             epoch_length=args.epoch_length,
             sfreq=args.sfreq,
             features_file=args.features_file,
+            sequence_length=args.sequence_length,
             **model_kwargs,
         )
         return 0

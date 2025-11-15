@@ -116,7 +116,11 @@ def extract_and_save_features(
             if not features_df.empty:
                 features_df["subject_id"] = row["subject_id"]
                 # Extraer subject_core (primeros 5 caracteres) para agrupar noches del mismo sujeto
-                features_df["subject_core"] = row["subject_id"][:5]
+                # Si subject_id tiene menos de 5 caracteres, usar el ID completo
+                subject_id_str = str(row["subject_id"])
+                features_df["subject_core"] = (
+                    subject_id_str[:5] if len(subject_id_str) >= 5 else subject_id_str
+                )
                 features_df["session_idx"] = idx
                 # Asegurar que los epochs mantengan orden temporal dentro de la sesión
                 # (ya están ordenados por epoch_time_start en extract_features_from_session)

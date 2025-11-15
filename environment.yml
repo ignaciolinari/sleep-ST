@@ -28,3 +28,4 @@ dependencies:
   - pip:
     - yasa
     - xgboost
+    - tensorflow>=2.16.0
