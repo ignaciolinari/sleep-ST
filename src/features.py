@@ -15,6 +15,7 @@ import mne
 import numpy as np
 import pandas as pd
 from scipy import signal
+from scipy.stats import entropy as scipy_entropy
 import yasa
 
 # Canales por defecto del dataset Sleep-EDF
@@ -292,11 +293,11 @@ def extract_spectral_features(
         alpha = features.get(f"{ch_name}_rel_alpha", 0.0)
         sigma = features.get(f"{ch_name}_rel_sigma", 0.0)
 
-        if delta > 0:
-            features[f"{ch_name}_theta_delta_ratio"] = theta / delta
-            features[f"{ch_name}_alpha_delta_ratio"] = alpha / delta
-        if sigma > 0:
-            features[f"{ch_name}_sigma_delta_ratio"] = sigma / delta
+        # Usar epsilon para evitar división por cero
+        eps = 1e-10
+        features[f"{ch_name}_theta_delta_ratio"] = theta / (delta + eps)
+        features[f"{ch_name}_alpha_delta_ratio"] = alpha / (delta + eps)
+        features[f"{ch_name}_sigma_delta_ratio"] = sigma / (delta + eps)
 
         # Frecuencia dominante (usando scipy directamente)
         try:
@@ -368,20 +369,48 @@ def extract_temporal_features(
         features[f"{ch_name}_hjorth_mobility"] = 0.0
         features[f"{ch_name}_hjorth_complexity"] = 0.0
 
-    # Entropía de Shannon (aproximada)
+    # Entropía de Shannon mejorada con más bins y scipy
     try:
-        # Normalizar y discretizar para calcular entropía
-        data_norm = (data - data.min()) / (data.max() - data.min() + 1e-10)
-        hist, _ = np.histogram(data_norm, bins=20)
-        hist = hist[hist > 0]
-        if len(hist) > 0:
-            prob = hist / hist.sum()
-            entropy = -np.sum(prob * np.log2(prob))
-            features[f"{ch_name}_entropy"] = float(entropy)
+        # Normalizar señal
+        data_range = data.max() - data.min()
+        if data_range > 1e-10:
+            data_norm = (data - data.min()) / data_range
+            # Usar 100 bins para mejor resolución (en lugar de 20)
+            hist, _ = np.histogram(data_norm, bins=100, density=False)
+            # Filtrar bins vacíos y calcular probabilidades
+            hist = hist[hist > 0]
+            if len(hist) > 1:
+                prob = hist / hist.sum()
+                # scipy_entropy usa log natural por defecto, base=2 para bits
+                features[f"{ch_name}_entropy"] = float(scipy_entropy(prob, base=2))
+            else:
+                features[f"{ch_name}_entropy"] = 0.0
         else:
             features[f"{ch_name}_entropy"] = 0.0
     except Exception:
         features[f"{ch_name}_entropy"] = 0.0
+
+    # Entropía espectral (informativa para estados de sueño)
+    try:
+        freqs, psd = signal.welch(
+            data, fs=len(data) / 30.0, nperseg=min(256, len(data))
+        )
+        # Filtrar a banda de interés (0.5-45 Hz)
+        freq_mask = (freqs >= 0.5) & (freqs <= 45)
+        if freq_mask.any():
+            psd_filtered = psd[freq_mask]
+            if psd_filtered.sum() > 1e-10:
+                # Normalizar PSD como distribución de probabilidad
+                psd_norm = psd_filtered / psd_filtered.sum()
+                features[f"{ch_name}_spectral_entropy"] = float(
+                    scipy_entropy(psd_norm, base=2)
+                )
+            else:
+                features[f"{ch_name}_spectral_entropy"] = 0.0
+        else:
+            features[f"{ch_name}_spectral_entropy"] = 0.0
+    except Exception:
+        features[f"{ch_name}_spectral_entropy"] = 0.0
 
     # Zero crossing rate
     zcr = np.sum(np.diff(np.signbit(data))) / len(data)
@@ -447,27 +476,181 @@ def extract_cross_channel_features(
         else:
             features["eog_emg_ratio"] = 0.0
 
-    # Coherencia en banda theta entre EEG y EOG (simplificada)
+    # Coherencia en banda theta entre EEG y EOG usando scipy.signal.coherence
     try:
         if len(eeg1) == len(eog) and len(eeg1) > 100:
-            # Calcular coherencia aproximada en banda theta
-            f, Pxx_eeg = signal.welch(eeg1, sfreq, nperseg=min(1024, len(eeg1)))
-            f, Pxx_eog = signal.welch(eog, sfreq, nperseg=min(1024, len(eog)))
-            f, Pxy = signal.csd(eeg1, eog, sfreq, nperseg=min(1024, len(eeg1)))
+            # Usar scipy.signal.coherence (método correcto)
+            nperseg = min(
+                256, len(eeg1) // 4
+            )  # Segmentos más pequeños para epochs de 30s
+            f, coh = signal.coherence(eeg1, eog, fs=sfreq, nperseg=nperseg)
 
-            # Banda theta
+            # Coherencia en banda theta (4-8 Hz)
             theta_mask = (f >= 4) & (f <= 8)
             if theta_mask.any():
-                coh_theta = np.abs(Pxy[theta_mask]) ** 2 / (
-                    Pxx_eeg[theta_mask] * Pxx_eog[theta_mask] + 1e-10
-                )
-                features["eeg_eog_theta_coherence"] = float(np.mean(coh_theta))
+                features["eeg_eog_theta_coherence"] = float(np.mean(coh[theta_mask]))
             else:
                 features["eeg_eog_theta_coherence"] = 0.0
+
+            # Coherencia en banda delta (0.5-4 Hz) - útil para N3
+            delta_mask = (f >= 0.5) & (f <= 4)
+            if delta_mask.any():
+                features["eeg_eog_delta_coherence"] = float(np.mean(coh[delta_mask]))
+            else:
+                features["eeg_eog_delta_coherence"] = 0.0
+
+            # Coherencia en banda sigma (12-15 Hz) - útil para spindles en N2
+            sigma_mask = (f >= 12) & (f <= 15)
+            if sigma_mask.any():
+                features["eeg_eog_sigma_coherence"] = float(np.mean(coh[sigma_mask]))
+            else:
+                features["eeg_eog_sigma_coherence"] = 0.0
         else:
             features["eeg_eog_theta_coherence"] = 0.0
+            features["eeg_eog_delta_coherence"] = 0.0
+            features["eeg_eog_sigma_coherence"] = 0.0
     except Exception:
         features["eeg_eog_theta_coherence"] = 0.0
+        features["eeg_eog_delta_coherence"] = 0.0
+        features["eeg_eog_sigma_coherence"] = 0.0
+
+    return features
+
+
+def extract_spindle_features(
+    data: np.ndarray,
+    sfreq: float,
+    ch_name: str,
+) -> dict[str, float]:
+    """Extrae features relacionadas con spindles de sueño usando YASA.
+
+    Los spindles son característicos del estadio N2 (12-15 Hz, duración 0.5-2s).
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Señal 1D de forma (n_samples,)
+    sfreq : float
+        Frecuencia de muestreo
+    ch_name : str
+        Nombre del canal
+
+    Returns
+    -------
+    dict[str, float]
+        Diccionario con features de spindles:
+        - spindle_count: número de spindles detectados
+        - spindle_density: spindles por minuto
+        - spindle_mean_duration: duración media (segundos)
+        - spindle_mean_amplitude: amplitud media (uV)
+    """
+    features = {
+        f"{ch_name}_spindle_count": 0.0,
+        f"{ch_name}_spindle_density": 0.0,
+        f"{ch_name}_spindle_mean_duration": 0.0,
+        f"{ch_name}_spindle_mean_amplitude": 0.0,
+    }
+
+    if len(data) < sfreq * 2:  # Mínimo 2 segundos de datos
+        return features
+
+    try:
+        # YASA spindles_detect requiere datos en formato (n_samples,)
+        # thresh: umbral para detección, valores bajos = más sensible
+        sp = yasa.spindles_detect(
+            data,
+            sf=sfreq,
+            freq_sp=(12, 15),  # Banda sigma estándar
+            duration=(0.5, 2),  # Duración típica de spindles
+            thresh={"rel_pow": 0.2, "corr": 0.65, "rms": 1.5},
+            verbose=False,
+        )
+
+        if sp is not None:
+            summary = sp.summary()
+            if summary is not None and len(summary) > 0:
+                n_spindles = len(summary)
+                epoch_duration_min = len(data) / sfreq / 60
+
+                features[f"{ch_name}_spindle_count"] = float(n_spindles)
+                features[f"{ch_name}_spindle_density"] = (
+                    float(n_spindles / epoch_duration_min)
+                    if epoch_duration_min > 0
+                    else 0.0
+                )
+                features[f"{ch_name}_spindle_mean_duration"] = float(
+                    summary["Duration"].mean()
+                )
+                features[f"{ch_name}_spindle_mean_amplitude"] = float(
+                    summary["Amplitude"].mean()
+                )
+    except Exception as e:
+        logging.debug(f"Error detectando spindles en {ch_name}: {e}")
+
+    return features
+
+
+def extract_slow_wave_features(
+    data: np.ndarray,
+    sfreq: float,
+    ch_name: str,
+) -> dict[str, float]:
+    """Extrae features de ondas lentas (slow waves) usando análisis de potencia delta.
+
+    Las ondas lentas son características del estadio N3 (0.5-4 Hz, alta amplitud).
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Señal 1D de forma (n_samples,)
+    sfreq : float
+        Frecuencia de muestreo
+    ch_name : str
+        Nombre del canal
+
+    Returns
+    -------
+    dict[str, float]
+        Diccionario con features de ondas lentas:
+        - slow_wave_power: potencia absoluta en banda delta
+        - slow_wave_ratio: ratio de potencia delta vs total
+        - slow_wave_peak_amplitude: amplitud pico-a-pico en banda delta
+    """
+    features = {
+        f"{ch_name}_slow_wave_power": 0.0,
+        f"{ch_name}_slow_wave_ratio": 0.0,
+        f"{ch_name}_slow_wave_peak_amplitude": 0.0,
+    }
+
+    if len(data) < sfreq * 2:
+        return features
+
+    try:
+        # Filtrar en banda delta (0.5-4 Hz)
+        nyq = sfreq / 2
+        low = 0.5 / nyq
+        high = 4.0 / nyq
+
+        if high < 1.0:  # Verificar que la frecuencia de corte es válida
+            b, a = signal.butter(4, [low, high], btype="band")
+            delta_filtered = signal.filtfilt(b, a, data)
+
+            # Potencia en banda delta
+            features[f"{ch_name}_slow_wave_power"] = float(np.mean(delta_filtered**2))
+
+            # Amplitud pico-a-pico
+            features[f"{ch_name}_slow_wave_peak_amplitude"] = float(
+                np.ptp(delta_filtered)
+            )
+
+            # Ratio delta vs total
+            total_power = np.mean(data**2)
+            if total_power > 1e-10:
+                features[f"{ch_name}_slow_wave_ratio"] = float(
+                    np.mean(delta_filtered**2) / total_power
+                )
+    except Exception as e:
+        logging.debug(f"Error extrayendo slow wave features en {ch_name}: {e}")
 
     return features
 
@@ -520,6 +703,18 @@ def extract_features_for_epoch(
         # Features temporales
         temporal = extract_temporal_features(ch_data, ch_name)
         features.update(temporal)
+
+    # Features de spindles y ondas lentas (solo para canales EEG)
+    for idx, ch_name in eeg_channels:
+        ch_data = epoch[idx, :]
+
+        # Detección de spindles (importantes para N2)
+        spindle_feats = extract_spindle_features(ch_data, sfreq, ch_name)
+        features.update(spindle_feats)
+
+        # Features de ondas lentas (importantes para N3)
+        slow_wave_feats = extract_slow_wave_features(ch_data, sfreq, ch_name)
+        features.update(slow_wave_feats)
 
     # Features de relación entre canales
     if eeg_channels and eog_channels and emg_channels:

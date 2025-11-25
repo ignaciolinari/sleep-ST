@@ -53,6 +53,22 @@ except ImportError:
     )
 
 
+def _configure_tensorflow_cpu_only() -> None:
+    """Configura TensorFlow para usar solo CPU.
+
+    Esta función deshabilita GPU/Metal para evitar problemas en macOS,
+    especialmente bus errors y segmentation faults en Apple Silicon.
+
+    Debe llamarse al inicio de funciones que usan TensorFlow.
+    """
+    import os
+    import tensorflow as tf
+
+    os.environ["TF_METAL_PLUGIN_LIBRARY_PATH"] = ""
+    os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+    tf.config.set_visible_devices([], "GPU")  # Deshabilitar GPU/Metal
+
+
 def prepare_features_dataset(
     manifest_path: Path | str,
     limit: Optional[int] = None,
@@ -989,8 +1005,9 @@ def train_xgboost(
         model.fit(X_train, y_train_encoded)
 
     # Guardar LabelEncoder y clases originales para decodificación
+    # Nota: XGBClassifier.classes_ es read-only después de fit, usamos otro nombre
     model.label_encoder_ = le
-    model.classes_ = le.classes_  # Guardar clases originales
+    model.original_classes_ = le.classes_  # Guardar clases originales
 
     logging.info(
         f"✓ Entrenamiento completado: XGBoost entrenado con {len(X_train)} muestras"
@@ -1052,13 +1069,7 @@ def train_cnn1d(
         raise ImportError("TensorFlow no está disponible.")
 
     # Forzar uso de CPU para evitar problemas con Metal en macOS
-    # Esto previene bus errors y segmentation faults en Apple Silicon
-    import os
-    import tensorflow as tf
-
-    os.environ["TF_METAL_PLUGIN_LIBRARY_PATH"] = ""
-    os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
-    tf.config.set_visible_devices([], "GPU")  # Deshabilitar GPU/Metal
+    _configure_tensorflow_cpu_only()
 
     logging.info("=" * 60)
     logging.info("ETAPA: ENTRENAMIENTO - CNN1D")
@@ -1231,13 +1242,7 @@ def train_lstm(
         raise ImportError("TensorFlow no está disponible.")
 
     # Forzar uso de CPU para evitar problemas con Metal en macOS
-    # Esto previene bus errors y segmentation faults en Apple Silicon
-    import os
-    import tensorflow as tf
-
-    os.environ["TF_METAL_PLUGIN_LIBRARY_PATH"] = ""
-    os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
-    tf.config.set_visible_devices([], "GPU")  # Deshabilitar GPU/Metal
+    _configure_tensorflow_cpu_only()
 
     logging.info("=" * 60)
     logging.info("ETAPA: ENTRENAMIENTO - LSTM")
