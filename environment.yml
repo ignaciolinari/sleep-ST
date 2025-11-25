@@ -31,5 +31,6 @@ dependencies:
   - pip:
     - yasa
     - xgboost
+    - optuna  # Optimización bayesiana de hiperparámetros
     - protobuf<5.0  # TensorFlow requiere Protobuf < 5.0
     - tensorflow==2.16.2  # Versión estable que funciona en macOS (con CPU forzado)
