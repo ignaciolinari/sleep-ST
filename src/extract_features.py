@@ -18,7 +18,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.features import extract_features_from_session
+from src.features import (
+    DEFAULT_FILTER_BAND,
+    DEFAULT_NOTCH_FREQS,
+    extract_features_from_session,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -31,6 +35,13 @@ def extract_and_save_features(
     sfreq: float | None = None,
     format: str = "parquet",
     movement_policy: str = "drop",
+    overlap: float = 0.0,
+    prefilter: bool = True,
+    bandpass_low: float | None = None,
+    bandpass_high: float | None = None,
+    notch_freqs: list[float] | None = None,
+    psd_method: str = "welch",
+    skip_cross_if_single_eeg: bool = True,
 ) -> None:
     """Extrae features y las guarda en un archivo.
 
@@ -52,6 +63,24 @@ def extract_and_save_features(
     logging.info("Iniciando extracción de features...")
     logging.info(f"Manifest: {manifest_path}")
     logging.info(f"Output: {output_path}")
+
+    if epoch_length <= 0:
+        raise ValueError("epoch_length debe ser > 0")
+    if overlap < 0:
+        raise ValueError("overlap debe ser >= 0")
+    if overlap >= epoch_length:
+        raise ValueError("overlap debe ser menor que epoch_length")
+
+    bp_low = DEFAULT_FILTER_BAND[0] if bandpass_low is None else float(bandpass_low)
+    bp_high = DEFAULT_FILTER_BAND[1] if bandpass_high is None else float(bandpass_high)
+    if bp_low >= bp_high:
+        raise ValueError("bandpass_low debe ser menor que bandpass_high")
+    bandpass = (bp_low, bp_high)
+    notch = tuple(notch_freqs) if notch_freqs else DEFAULT_NOTCH_FREQS
+
+    psd_method = (psd_method or "welch").lower()
+    if psd_method not in {"welch", "multitaper"}:
+        raise ValueError("psd_method debe ser 'welch' o 'multitaper'")
 
     # Cargar manifest
     manifest = pd.read_csv(manifest_path)
@@ -113,6 +142,12 @@ def extract_and_save_features(
                 epoch_length=epoch_length,
                 sfreq=sfreq,
                 movement_policy=movement_policy,
+                overlap=overlap,
+                apply_prefilter=prefilter,
+                bandpass=bandpass,
+                notch_freqs=notch,
+                psd_method=psd_method,
+                skip_cross_if_single_eeg=skip_cross_if_single_eeg,
             )
 
             if not features_df.empty:
@@ -192,6 +227,57 @@ def main() -> int:
         help="Duración de cada epoch en segundos",
     )
     parser.add_argument(
+        "--overlap",
+        type=float,
+        default=0.0,
+        help="Solapamiento entre epochs en segundos (debe ser menor que epoch-length).",
+    )
+    parser.add_argument(
+        "--prefilter",
+        dest="prefilter",
+        action="store_true",
+        help="Aplicar detrend + band-pass + notch antes de extraer features (default: on).",
+    )
+    parser.add_argument(
+        "--no-prefilter",
+        dest="prefilter",
+        action="store_false",
+        help="Desactivar filtrado/notch previo a la extracción de features.",
+    )
+    parser.set_defaults(prefilter=True)
+    parser.add_argument(
+        "--bandpass-low",
+        type=float,
+        default=None,
+        help="Corte inferior del band-pass para features (Hz). Default: 0.3 Hz.",
+    )
+    parser.add_argument(
+        "--bandpass-high",
+        type=float,
+        default=None,
+        help="Corte superior del band-pass para features (Hz). Default: 45 Hz.",
+    )
+    parser.add_argument(
+        "--notch-freqs",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Frecuencias de notch (Hz), ej. 50 60. Default: 50 y 60 Hz.",
+    )
+    parser.add_argument(
+        "--psd-method",
+        choices=["welch", "multitaper"],
+        default="welch",
+        help="Método para PSD en features espectrales (welch o multitaper).",
+    )
+    parser.add_argument(
+        "--keep-cross-single-eeg",
+        dest="skip_cross_if_single_eeg",
+        action="store_false",
+        help="Mantener features cross-channel aunque solo haya un EEG (por defecto se omiten).",
+    )
+    parser.set_defaults(skip_cross_if_single_eeg=True)
+    parser.add_argument(
         "--sfreq",
         type=float,
         default=None,
@@ -221,6 +307,13 @@ def main() -> int:
             sfreq=args.sfreq,
             format=args.format,
             movement_policy=args.movement_policy,
+            overlap=args.overlap,
+            prefilter=args.prefilter,
+            bandpass_low=args.bandpass_low,
+            bandpass_high=args.bandpass_high,
+            notch_freqs=args.notch_freqs,
+            psd_method=args.psd_method,
+            skip_cross_if_single_eeg=args.skip_cross_if_single_eeg,
         )
         return 0
     except Exception as e:

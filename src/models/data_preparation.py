@@ -18,6 +18,8 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 
 from src.features import (
+    DEFAULT_FILTER_BAND,
+    DEFAULT_NOTCH_FREQS,
     assign_stages_to_epochs,
     create_epochs,
     extract_features_from_session,
@@ -27,12 +29,36 @@ from src.features import (
 from src.models.base import STAGE_ORDER, TF_AVAILABLE
 
 
+def _core_stage_labels(
+    features_df: pd.DataFrame, stratify_by: str
+) -> Optional[pd.Series]:
+    """Calcula la etiqueta de estadio dominante por subject_core."""
+    if "stage" not in features_df.columns or stratify_by not in features_df.columns:
+        return None
+
+    stage_counts = (
+        features_df.dropna(subset=["stage"])
+        .groupby([stratify_by, "stage"])
+        .size()
+        .unstack(fill_value=0)
+    )
+    if stage_counts.empty:
+        return None
+    return stage_counts.idxmax(axis=1)
+
+
 def prepare_features_dataset(
     manifest_path: Path | str,
     limit: Optional[int] = None,
     epoch_length: float = 30.0,
     sfreq: Optional[float] = None,
     movement_policy: str = "drop",
+    overlap: float = 0.0,
+    apply_prefilter: bool = True,
+    bandpass: tuple[float, float] = DEFAULT_FILTER_BAND,
+    notch_freqs: tuple[float, ...] | list[float] | None = DEFAULT_NOTCH_FREQS,
+    psd_method: str = "welch",
+    skip_cross_if_single_eeg: bool = True,
 ) -> pd.DataFrame:
     """Prepara dataset de features desde múltiples sesiones.
 
@@ -46,6 +72,18 @@ def prepare_features_dataset(
         Duración de cada epoch en segundos
     sfreq : float, optional
         Frecuencia de muestreo objetivo
+    overlap : float
+        Solapamiento entre epochs (segundos)
+    apply_prefilter : bool
+        Si True, aplica detrend + band-pass + notch antes de extraer features
+    bandpass : tuple[float, float]
+        Banda pasa-banda previa a features
+    notch_freqs : tuple | list | None
+        Frecuencias de notch (None para desactivar)
+    psd_method : {"welch", "multitaper"}
+        Método para PSD en features espectrales
+    skip_cross_if_single_eeg : bool
+        Si True, omite features EEG-EEG/coherencia si solo hay un EEG
 
     Returns
     -------
@@ -112,6 +150,12 @@ def prepare_features_dataset(
                 epoch_length=epoch_length,
                 sfreq=sfreq,
                 movement_policy=movement_policy,
+                overlap=overlap,
+                apply_prefilter=apply_prefilter,
+                bandpass=bandpass,
+                notch_freqs=notch_freqs,
+                psd_method=psd_method,
+                skip_cross_if_single_eeg=skip_cross_if_single_eeg,
             )
 
             if not features_df.empty:
@@ -151,6 +195,7 @@ def prepare_raw_epochs_dataset(
     sfreq: Optional[float] = None,
     channels: Optional[list[str]] = None,
     movement_policy: str = "drop",
+    overlap: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray, pd.DataFrame]:
     """Prepara dataset de epochs raw (señales) para modelos de deep learning.
 
@@ -166,6 +211,8 @@ def prepare_raw_epochs_dataset(
         Frecuencia de muestreo objetivo
     channels : list[str], optional
         Canales a usar. Si None, usa DEFAULT_CHANNELS.
+    overlap : float
+        Solapamiento entre epochs (segundos)
 
     Returns
     -------
@@ -238,7 +285,7 @@ def prepare_raw_epochs_dataset(
 
             # Crear epochs
             epochs, epochs_times = create_epochs(
-                data, actual_sfreq, epoch_length=epoch_length
+                data, actual_sfreq, epoch_length=epoch_length, overlap=overlap
             )
 
             if len(epochs) == 0:
@@ -508,6 +555,7 @@ def prepare_train_test_split(
     max_attempts: int = 100,
     temporal_split: bool = False,
     session_col: str = "session_idx",
+    stage_stratify: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame]]:
     """Divide dataset en train/test/val respetando sujetos.
 
@@ -540,6 +588,10 @@ def prepare_train_test_split(
         por sujetos.
     session_col : str
         Nombre de la columna que identifica la sesión (para temporal_split).
+    stage_stratify : bool
+        Si True (default), estratifica por estadio dominante a nivel sujeto_core
+        antes de verificar cobertura de clases, para reducir la probabilidad de
+        clases ausentes en los splits.
 
     Returns
     -------
@@ -595,6 +647,85 @@ def prepare_train_test_split(
                     f"{missing_overall}"
                 )
 
+        stratified_split_done = False
+        train_df = test_df = val_df = None
+
+        # Estratificación por estadio dominante a nivel sujeto_core (no temporal)
+        if (
+            stage_stratify
+            and not temporal_split
+            and "stage" in features_df.columns
+            and stratify_by in features_df.columns
+        ):
+            core_stage_labels = _core_stage_labels(features_df, stratify_by)
+            if core_stage_labels is not None and len(core_stage_labels) >= 2:
+                try:
+                    core_array = core_stage_labels.index.to_numpy()
+                    label_array = core_stage_labels.values
+
+                    if val_size:
+                        train_cores, temp_cores, train_labels, temp_labels = (
+                            train_test_split(
+                                core_array,
+                                label_array,
+                                test_size=test_size + val_size,
+                                stratify=label_array,
+                                random_state=random_state,
+                            )
+                        )
+                        val_ratio = val_size / (test_size + val_size)
+                        test_cores, val_cores, _, _ = train_test_split(
+                            temp_cores,
+                            temp_labels,
+                            test_size=val_ratio,
+                            stratify=temp_labels,
+                            random_state=random_state,
+                        )
+                    else:
+                        train_cores, test_cores, _, _ = train_test_split(
+                            core_array,
+                            label_array,
+                            test_size=test_size,
+                            stratify=label_array,
+                            random_state=random_state,
+                        )
+                        val_cores = np.array([], dtype=core_array.dtype)
+
+                    train_df = features_df[features_df[stratify_by].isin(train_cores)]
+                    test_df = features_df[features_df[stratify_by].isin(test_cores)]
+                    val_df = (
+                        features_df[features_df[stratify_by].isin(val_cores)]
+                        if val_size
+                        else None
+                    )
+                    stratified_split_done = True
+
+                    if ensure_class_coverage and classes_to_check:
+                        missing = {}
+                        missing_train = _find_missing_classes(
+                            train_df, classes_to_check, "stage", "train"
+                        )
+                        missing_test = _find_missing_classes(
+                            test_df, classes_to_check, "stage", "test"
+                        )
+                        missing_val = (
+                            _find_missing_classes(
+                                val_df, classes_to_check, "stage", "val"
+                            )
+                            if val_df is not None
+                            else []
+                        )
+                        if missing_train:
+                            missing["train"] = missing_train
+                        if missing_test:
+                            missing["test"] = missing_test
+                        if missing_val:
+                            missing["val"] = missing_val
+                        if missing:
+                            stratified_split_done = False
+                except ValueError:
+                    stratified_split_done = False
+
         if temporal_split:
             train_df, test_df, val_df = _temporal_split_by_session(
                 features_df,
@@ -627,7 +758,7 @@ def prepare_train_test_split(
                         "Split temporal sin cobertura de clases: "
                         f"{missing}. Ajusta tamaños o datos."
                     )
-        else:
+        elif not stratified_split_done:
             rng = np.random.default_rng(random_state)
 
             # Intentar hasta max_attempts encontrar un split con cobertura de clases

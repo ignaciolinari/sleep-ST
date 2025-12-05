@@ -168,17 +168,22 @@ Para cada canal EEG:
 
 - Las features se calculan usando **YASA** (Yet Another Spindle Algorithm) para análisis espectral y detección de spindles
 - El análisis espectral usa el método de **Welch** para calcular la densidad espectral de potencia (PSD)
+- Opcional: PSD multi-taper (`--psd-method multitaper`) para mejorar estabilidad espectral en señales cortas
 - La coherencia usa **scipy.signal.coherence** para un cálculo correcto
 - La entropía usa **scipy.stats.entropy** con 100 bins para mejor resolución
 - Las features están optimizadas para distinguir estadios de sueño con pocos canales (2 EEG + EOG + EMG)
-- Cada canal se prefiltra (0.3–45 Hz) con detrend y notch 50/60 Hz antes de extraer PSD, spindles o slow waves; los flags permiten desactivar el filtrado/notch para comparar configuraciones.
-- Si sólo hay un EEG disponible, `eeg_eeg_correlation` se marca como NaN en lugar de duplicar el canal
+- Cada canal se prefiltra (0.3–45 Hz) con detrend y notch 50/60 Hz antes de extraer PSD, spindles o slow waves; los flags de CLI permiten desactivar o ajustar banda/notch.
+- Si sólo hay un EEG disponible, se omiten las features EEG-EEG/coherencia en vez de rellenar NaN
+- La entropía espectral usa `fs=sfreq`; si no se provee `sfreq`, se deriva `fs = len(data) / epoch_length` para el Welch, de modo que cambiar `epoch_length` mantiene la escala correcta.
+- Se valida que `overlap < epoch_length` y que el paso `(epoch_length - overlap) * sfreq` sea > 0; de lo contrario se lanza un `ValueError` con mensaje claro.
+- Los epochs sin etiqueta se descartan y se loggea cuántos y qué porcentaje se pierden por sesión, antes de extraer features.
+- La densidad de spindles se calcula con la duración real del epoch `len(data)/sfreq`, por lo que respeta `epoch_length` distintos de 30 s.
 - El código maneja errores: si falla alguna feature, se asigna 0.0 en lugar de fallar
 - Los ratios espectrales usan epsilon (1e-10) para evitar división por cero
 
 ### Splits y guardarraíles de modelado
 
-- Los splits se hacen por `subject_core` para evitar leakage; se reintenta hasta lograr cobertura de todas las clases presentes en train/val/test (o se lanza un error si es imposible con los tamaños solicitados).
+- Los splits se hacen por `subject_core` para evitar leakage; se estratifican por estadio dominante del sujeto y se reintenta hasta lograr cobertura de todas las clases presentes en train/val/test (o se lanza un error si es imposible con los tamaños solicitados).
 - Split temporal opcional por sesión/noches (`--temporal-split`): mantiene las sesiones más recientes en test/val y usa `GroupTimeSeriesSplit` en CV; requiere `epoch_time_start` o `epoch_index`.
 - Modelos CNN1D/LSTM guardan estadísticas de normalización (`channel_means_`/`channel_stds_` o `scaler_`) y la evaluación falla si no están presentes para evitar normalizar con datos de test.
 

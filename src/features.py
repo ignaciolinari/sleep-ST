@@ -169,6 +169,11 @@ def create_epochs(
         Array de forma (n_epochs, n_channels, n_samples_per_epoch)
     times : np.ndarray
         Array con tiempos de inicio de cada epoch en segundos
+
+    Notes
+    -----
+    Valida que `overlap < epoch_length` y que el paso `(epoch_length - overlap) * sfreq`
+    sea > 0; en caso contrario se lanza un ValueError con mensaje explícito.
     """
     if epoch_length <= 0:
         raise ValueError("epoch_length debe ser > 0")
@@ -298,6 +303,8 @@ def extract_spectral_features(
     data: np.ndarray,
     sfreq: float,
     ch_name: str,
+    *,
+    psd_method: str = "welch",
 ) -> dict[str, float]:
     """Extrae features espectrales usando YASA.
 
@@ -320,6 +327,10 @@ def extract_spectral_features(
 
     features = {}
 
+    method = (psd_method or "welch").lower()
+    if method not in {"welch", "multitaper"}:
+        method = "welch"
+
     # Calcular PSD usando YASA
     try:
         # YASA espera bands como lista de tuplas (fmin, fmax, nombre)
@@ -328,20 +339,35 @@ def extract_spectral_features(
             for band_name, (fmin, fmax) in FREQ_BANDS.items()
         ]
 
-        bandpower = yasa.bandpower(
-            data,
-            sf=sfreq,
-            bands=bands_yasa,
-            relative=True,  # Potencia relativa
-        )
-
-        # Agregar potencia absoluta también
-        bandpower_abs = yasa.bandpower(
-            data,
-            sf=sfreq,
-            bands=bands_yasa,
-            relative=False,
-        )
+        try:
+            bandpower = yasa.bandpower(
+                data,
+                sf=sfreq,
+                bands=bands_yasa,
+                relative=True,  # Potencia relativa
+                method=method,
+            )
+            bandpower_abs = yasa.bandpower(
+                data,
+                sf=sfreq,
+                bands=bands_yasa,
+                relative=False,
+                method=method,
+            )
+        except TypeError:
+            # Versiones antiguas de YASA no aceptan method -> fallback a default (Welch)
+            bandpower = yasa.bandpower(
+                data,
+                sf=sfreq,
+                bands=bands_yasa,
+                relative=True,  # Potencia relativa
+            )
+            bandpower_abs = yasa.bandpower(
+                data,
+                sf=sfreq,
+                bands=bands_yasa,
+                relative=False,
+            )
 
         # YASA retorna un DataFrame, extraer valores por nombre de banda
         # Los nombres en YASA son capitalizados (Delta, Theta, etc.)
@@ -434,6 +460,11 @@ def extract_temporal_features(
     -------
     dict[str, float]
         Diccionario con features temporales
+
+    Notes
+    -----
+    Si `sfreq` no se provee o es 0, la entropía espectral deriva `fs = len(data) / epoch_length`
+    para el Welch, manteniendo la escala correcta aunque cambie `epoch_length`.
     """
     if len(data.shape) > 1:
         raise ValueError("data debe ser 1D")
@@ -523,6 +554,8 @@ def extract_cross_channel_features(
     eog: np.ndarray,
     emg: np.ndarray,
     sfreq: float,
+    *,
+    require_eeg2: bool = False,
 ) -> dict[str, float]:
     """Extrae features de relación entre canales.
 
@@ -546,10 +579,13 @@ def extract_cross_channel_features(
     """
     features = {}
 
-    # Correlación entre canales EEG
+    # Correlación entre canales EEG (solo si hay dos EEG)
     if eeg2 is not None and len(eeg1) == len(eeg2) and len(eeg1) > 0:
         corr_eeg = np.corrcoef(eeg1, eeg2)[0, 1]
         features["eeg_eeg_correlation"] = float(corr_eeg)
+    elif require_eeg2:
+        # Si se exige EEG2 y no está disponible, omitir la feature
+        return features
     else:
         features["eeg_eeg_correlation"] = np.nan
 
@@ -783,6 +819,8 @@ def extract_features_for_epoch(
     apply_prefilter: bool = True,
     bandpass: tuple[float, float] = DEFAULT_FILTER_BAND,
     notch_freqs: tuple[float, ...] | list[float] | None = DEFAULT_NOTCH_FREQS,
+    psd_method: str = "welch",
+    skip_cross_if_single_eeg: bool = True,
 ) -> dict[str, float]:
     """Extrae todas las features para un epoch.
 
@@ -839,7 +877,9 @@ def extract_features_for_epoch(
         cleaned_epoch.append(preprocessed)
 
         # Features espectrales
-        spectral = extract_spectral_features(preprocessed, sfreq, ch_name)
+        spectral = extract_spectral_features(
+            preprocessed, sfreq, ch_name, psd_method=psd_method
+        )
         features.update(spectral)
 
         # Features temporales
@@ -871,14 +911,23 @@ def extract_features_for_epoch(
         emg_data = cleaned_epoch[emg_idx]
 
         # Si hay segundo EEG, usarlo también
+        has_second_eeg = len(eeg_channels) > 1
         eeg2_data = None
-        if len(eeg_channels) > 1:
+        if has_second_eeg:
             eeg2_idx, _ = eeg_channels[1]
             eeg2_data = cleaned_epoch[eeg2_idx]
 
-        cross_channel = extract_cross_channel_features(
-            eeg1_data, eeg2_data, eog_data, emg_data, sfreq
-        )
+        if not has_second_eeg and skip_cross_if_single_eeg:
+            cross_channel = {}
+        else:
+            cross_channel = extract_cross_channel_features(
+                eeg1_data,
+                eeg2_data,
+                eog_data,
+                emg_data,
+                sfreq,
+                require_eeg2=skip_cross_if_single_eeg,
+            )
         features.update(cross_channel)
 
     return features
@@ -891,6 +940,12 @@ def extract_features_from_session(
     sfreq: Optional[float] = None,
     channels: Optional[list[str]] = None,
     movement_policy: str = "drop",
+    overlap: float = 0.0,
+    apply_prefilter: bool = True,
+    bandpass: tuple[float, float] = DEFAULT_FILTER_BAND,
+    notch_freqs: tuple[float, ...] | list[float] | None = DEFAULT_NOTCH_FREQS,
+    psd_method: str = "welch",
+    skip_cross_if_single_eeg: bool = True,
 ) -> pd.DataFrame:
     """Extrae features para todos los epochs de una sesión.
 
@@ -906,18 +961,37 @@ def extract_features_from_session(
         Frecuencia de muestreo objetivo
     channels : list[str], optional
         Canales a usar
+    overlap : float
+        Solapamiento entre epochs en segundos (default: 0)
+    apply_prefilter : bool
+        Si True aplica detrend + band-pass + notch antes de extraer features
+    bandpass : tuple[float, float]
+        Banda del filtro pasa-banda previa a extracción (default: 0.3-45 Hz)
+    notch_freqs : tuple | list | None
+        Frecuencias de notch a aplicar (default: 50, 60 Hz). None desactiva notch.
+    psd_method : {"welch", "multitaper"}
+        Método para el cálculo de PSD en features espectrales (default: welch)
+    skip_cross_if_single_eeg : bool
+        Si True, omite las features EEG-EEG/coherencia cuando sólo hay un EEG
 
     Returns
     -------
     pd.DataFrame
         DataFrame con una fila por epoch y columnas de features + 'stage'
+
+    Notes
+    -----
+    Los epochs sin etiqueta se omiten; antes de descartarlos se loggea cuántos y
+    el porcentaje de pérdida sobre la sesión.
     """
     # Cargar datos
     data, actual_sfreq, ch_names = load_psg_data(psg_path, channels, sfreq)
     hypnogram = load_hypnogram(hypnogram_path, movement_policy=movement_policy)
 
     # Crear epochs
-    epochs, epochs_times = create_epochs(data, actual_sfreq, epoch_length=epoch_length)
+    epochs, epochs_times = create_epochs(
+        data, actual_sfreq, epoch_length=epoch_length, overlap=overlap
+    )
 
     if len(epochs) == 0:
         logging.warning(f"No se pudieron crear epochs para {psg_path}")
@@ -946,7 +1020,15 @@ def extract_features_from_session(
             continue  # Saltar epochs sin etiqueta
 
         epoch_features = extract_features_for_epoch(
-            epoch, ch_names, actual_sfreq, epoch_length=epoch_length
+            epoch,
+            ch_names,
+            actual_sfreq,
+            epoch_length=epoch_length,
+            apply_prefilter=apply_prefilter,
+            bandpass=bandpass,
+            notch_freqs=notch_freqs,
+            psd_method=psd_method,
+            skip_cross_if_single_eeg=skip_cross_if_single_eeg,
         )
         epoch_features["stage"] = stage
         epoch_features["epoch_time_start"] = epoch_time  # Tiempo de inicio del epoch

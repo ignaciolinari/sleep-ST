@@ -8,7 +8,7 @@ import argparse
 import logging
 import pickle
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -18,6 +18,7 @@ from sklearn.metrics import (
     cohen_kappa_score,
     f1_score,
 )
+from sklearn.model_selection import LeaveOneGroupOut
 from sklearn.preprocessing import LabelEncoder
 
 try:
@@ -43,6 +44,7 @@ from .data_preparation import (
     prepare_sequence_dataset,
     prepare_train_test_split,
 )
+from ..features import DEFAULT_FILTER_BAND, DEFAULT_NOTCH_FREQS
 from .random_forest import train_random_forest
 from .xgboost_model import train_xgboost
 from .optimization import optimize_hyperparameters
@@ -57,9 +59,11 @@ def cross_validate_model(
     X: pd.DataFrame,
     y: pd.Series,
     groups: pd.Series,
-    cv: "SubjectTimeSeriesSplit | GroupTimeSeriesSplit",
+    cv: "SubjectTimeSeriesSplit | GroupTimeSeriesSplit | LeaveOneGroupOut",
     scoring: str = "accuracy",
     X_full: Optional[pd.DataFrame] = None,
+    required_classes: Optional[Sequence[str]] = None,
+    strict_class_coverage: bool = False,
 ) -> dict:
     """Realiza cross-validation respetando grupos (subject-level).
 
@@ -82,6 +86,12 @@ def cross_validate_model(
         DataFrame completo con columnas temporales (epoch_time_start, epoch_index).
         Solo necesario si se usa GroupTimeSeriesSplit. Para SubjectTimeSeriesSplit
         se puede usar None y se usará X directamente.
+    required_classes : Sequence[str], optional
+        Clases que se espera cubrir en cada split. Si se proporciona, se revisa
+        cobertura en train y test por fold.
+    strict_class_coverage : bool
+        Si True, lanza ValueError cuando falten clases requeridas en algún split.
+        Si False (default), solo emite warning.
 
     Returns
     -------
@@ -90,6 +100,8 @@ def cross_validate_model(
     """
     cv_scores = []
     fold_metrics = []
+
+    required_classes = list(required_classes) if required_classes else []
 
     # Para SubjectTimeSeriesSplit no necesitamos columnas temporales
     # Para GroupTimeSeriesSplit sí las necesitamos
@@ -118,6 +130,32 @@ def cross_validate_model(
         y_train_fold = y.iloc[train_idx]
         X_test_fold = X.iloc[test_idx]
         y_test_fold = y.iloc[test_idx]
+
+        def _check_missing_classes(y_split: pd.Series, split_label: str) -> list[str]:
+            if not required_classes:
+                return []
+            present = set(pd.Series(y_split).dropna().unique())
+            missing = [cls for cls in required_classes if cls not in present]
+            if missing:
+                msg = (
+                    f"Fold {fold_idx + 1}: {split_label} sin clases {missing}. "
+                    "Resultados pueden ser inestables."
+                )
+                if strict_class_coverage:
+                    raise ValueError(
+                        msg + " Habilita más sujetos o ajusta cv_strategy/test_size."
+                    )
+                logging.warning(msg)
+            return missing
+
+        missing_train = _check_missing_classes(y_train_fold, "train")
+        missing_test = _check_missing_classes(y_test_fold, "test")
+
+        if missing_train or missing_test:
+            logging.info(
+                f"  Cobertura de clases - train faltan: {missing_train or 'ninguna'}; "
+                f"test faltan: {missing_test or 'ninguna'}"
+            )
 
         logging.info(f"  Entrenando modelo para fold {fold_idx + 1}...")
         # Entrenar modelo
@@ -201,14 +239,18 @@ def cross_validate_model(
 
         logging.info(f"  ✓ Fold {fold_idx + 1} completado - {scoring}: {score:.4f}")
         cv_scores.append(score)
-        fold_metrics.append(
-            {
-                "fold": fold_idx,
-                "train_size": len(train_idx),
-                "test_size": len(test_idx),
-                "score": score,
+        fold_metric = {
+            "fold": fold_idx,
+            "train_size": len(train_idx),
+            "test_size": len(test_idx),
+            "score": score,
+        }
+        if missing_train or missing_test:
+            fold_metric["missing_classes"] = {
+                "train": missing_train,
+                "test": missing_test,
             }
-        )
+        fold_metrics.append(fold_metric)
 
     logging.info("\n" + "=" * 60)
     logging.info("RESUMEN DE CROSS-VALIDATION")
@@ -292,6 +334,16 @@ def run_training_pipeline(
     features_file: Optional[Path | str] = None,
     sequence_length: int = 5,  # Para LSTM
     temporal_split: bool = False,
+    cv_strategy: str = "subject-kfold",
+    strict_class_coverage: bool = False,
+    overlap: float = 0.0,
+    prefilter: bool = True,
+    bandpass_low: Optional[float] = None,
+    bandpass_high: Optional[float] = None,
+    notch_freqs: Optional[Sequence[float]] = None,
+    psd_method: str = "welch",
+    stage_stratify: bool = True,
+    skip_cross_if_single_eeg: bool = True,
     **model_kwargs,
 ) -> dict:
     """Ejecuta pipeline completo de entrenamiento y evaluación.
@@ -321,6 +373,14 @@ def run_training_pipeline(
     temporal_split : bool
         Si True, usa splits temporales por sesión dentro de cada sujeto para
         train/val/test y CV (holdout de sesiones recientes).
+    cv_strategy : str
+        Estrategia de CV cuando cross_validate está activado.
+        - "subject-kfold": k-fold por sujeto (default)
+        - "loso": leave-one-subject-out (un sujeto en test por fold)
+        - "group-temporal": CV temporal por grupo/sujeto
+    strict_class_coverage : bool
+        Si True, falla cuando algún split de CV carece de clases requeridas.
+        En train/test simple ya se valida cobertura vía prepare_train_test_split.
     **model_kwargs
         Argumentos adicionales para el modelo
 
@@ -339,6 +399,29 @@ def run_training_pipeline(
 
     # Permitir que temporal_split llegue vía model_kwargs pero no se propague a los entrenadores
     temporal_split = bool(temporal_split or model_kwargs.pop("temporal_split", False))
+
+    if epoch_length <= 0:
+        raise ValueError("epoch_length debe ser > 0")
+    if overlap < 0:
+        raise ValueError("overlap debe ser >= 0")
+    if overlap >= epoch_length:
+        raise ValueError("overlap debe ser menor que epoch_length")
+
+    # Band-pass / notch para features
+    bandpass_low = (
+        DEFAULT_FILTER_BAND[0] if bandpass_low is None else float(bandpass_low)
+    )
+    bandpass_high = (
+        DEFAULT_FILTER_BAND[1] if bandpass_high is None else float(bandpass_high)
+    )
+    if bandpass_low >= bandpass_high:
+        raise ValueError("bandpass_low debe ser menor que bandpass_high")
+    bandpass = (bandpass_low, bandpass_high)
+    notch = tuple(notch_freqs) if notch_freqs else DEFAULT_NOTCH_FREQS
+
+    psd_method = (psd_method or "welch").lower()
+    if psd_method not in {"welch", "multitaper"}:
+        psd_method = "welch"
 
     # Detectar contexto: primera corrida vs corrida avanzada
     output_dir_path = Path(output_dir)
@@ -402,7 +485,11 @@ def run_training_pipeline(
         # CNN1D necesita señales raw
         logging.info("Preparando datos raw para CNN1D...")
         X_raw, y_raw, metadata_df = prepare_raw_epochs_dataset(
-            manifest_path, limit=limit, epoch_length=epoch_length, sfreq=sfreq
+            manifest_path,
+            limit=limit,
+            epoch_length=epoch_length,
+            sfreq=sfreq,
+            overlap=overlap,
         )
         logging.info("✓ Datos raw preparados para CNN1D")
         # Saltar al entrenamiento directo (manejo especial más abajo)
@@ -452,7 +539,16 @@ def run_training_pipeline(
         else:
             # Extraer features desde manifest
             features_df = prepare_features_dataset(
-                manifest_path, limit=limit, epoch_length=epoch_length, sfreq=sfreq
+                manifest_path,
+                limit=limit,
+                epoch_length=epoch_length,
+                sfreq=sfreq,
+                overlap=overlap,
+                apply_prefilter=prefilter,
+                bandpass=bandpass,
+                notch_freqs=notch,
+                psd_method=psd_method,
+                skip_cross_if_single_eeg=skip_cross_if_single_eeg,
             )
 
     # Pipeline especial para modelos de deep learning
@@ -480,6 +576,7 @@ def run_training_pipeline(
             ensure_class_coverage=True,
             temporal_split=temporal_split,
             session_col="session_idx",
+            stage_stratify=stage_stratify,
         )
 
         train_idx = train_meta.index.to_numpy()
@@ -648,15 +745,38 @@ def run_training_pipeline(
     # 4. Cross-validation o train/test simple
     use_cv = model_kwargs.pop("cross_validate", False)
     cv_folds = model_kwargs.pop("cv_folds", 5)
+    cv_strategy_normalized = (cv_strategy or "subject-kfold").lower()
 
     if use_cv:
-        # Cross-validation respetando grupos y, opcionalmente, tiempo
-        logging.info(
-            f"Modo: Cross-validation {'temporal ' if temporal_split else ''}({cv_folds} folds)"
-        )
-        logging.info(f"Test size: {test_size}")
         groups = combined_df["subject_core"]
-        if temporal_split:
+        if cv_strategy_normalized not in {
+            "subject-kfold",
+            "loso",
+            "group-temporal",
+        }:
+            raise ValueError(
+                "cv_strategy debe ser 'subject-kfold', 'loso' o 'group-temporal'"
+            )
+
+        if temporal_split and cv_strategy_normalized == "loso":
+            raise ValueError(
+                "cv_strategy='loso' no es compatible con temporal_split=True. "
+                "Usa 'group-temporal' o desactiva temporal_split."
+            )
+
+        # Si se solicita temporal_split pero cv_strategy no es explícitamente temporal,
+        # priorizar la división temporal para consistencia
+        cv_strategy_effective = (
+            "group-temporal" if temporal_split else cv_strategy_normalized
+        )
+
+        if cv_strategy_effective == "loso":
+            cv = LeaveOneGroupOut()
+            X_full_for_split = None
+            effective_folds = groups.nunique()
+            logging.info("Modo: Cross-validation [loso] (1 sujeto en test por fold)")
+            logging.info("Test size se ignora en LOSO.")
+        elif cv_strategy_effective == "group-temporal":
             if not {"epoch_index", "epoch_time_start"} & set(combined_df.columns):
                 raise ValueError(
                     "Se solicitó temporal_split pero no hay columnas temporales "
@@ -664,9 +784,19 @@ def run_training_pipeline(
                 )
             cv = GroupTimeSeriesSplit(n_splits=cv_folds, test_size=test_size)
             X_full_for_split = combined_df
+            effective_folds = cv.get_n_splits(combined_df, y, groups)
+            logging.info(
+                f"Modo: Cross-validation [group-temporal] ({effective_folds} folds)"
+            )
+            logging.info(f"Test size (por grupo): {test_size}")
         else:
             cv = SubjectTimeSeriesSplit(n_splits=cv_folds, test_size=test_size)
             X_full_for_split = None
+            effective_folds = cv.get_n_splits(X, y, groups)
+            logging.info(
+                f"Modo: Cross-validation [subject-kfold] ({effective_folds} folds)"
+            )
+            logging.info(f"Test size (por sujeto): {test_size}")
 
         # Crear modelo base
         if model_type == "random_forest":
@@ -687,6 +817,8 @@ def run_training_pipeline(
             cv,
             scoring="f1_macro",
             X_full=X_full_for_split,
+            required_classes=STAGE_ORDER,
+            strict_class_coverage=strict_class_coverage,
         )
 
         # Entrenar modelo final con todos los datos de train
@@ -700,6 +832,7 @@ def run_training_pipeline(
             val_size=val_size,
             ensure_class_coverage=True,
             temporal_split=temporal_split,
+            stage_stratify=stage_stratify,
         )
         X_train = train_df[feature_cols]
         y_train = train_df["stage"]
@@ -732,6 +865,7 @@ def run_training_pipeline(
             val_size=val_size,
             ensure_class_coverage=True,
             temporal_split=temporal_split,
+            stage_stratify=stage_stratify,
         )
         X_train = train_df[feature_cols]
         y_train = train_df["stage"]
@@ -884,6 +1018,63 @@ def build_parser() -> argparse.ArgumentParser:
         help="Duración de cada epoch en segundos",
     )
     parser.add_argument(
+        "--overlap",
+        type=float,
+        default=0.0,
+        help="Solapamiento entre epochs en segundos (debe ser menor que epoch-length).",
+    )
+    parser.add_argument(
+        "--prefilter",
+        dest="prefilter",
+        action="store_true",
+        help="Aplicar detrend + band-pass + notch antes de extraer features (default: on).",
+    )
+    parser.add_argument(
+        "--no-prefilter",
+        dest="prefilter",
+        action="store_false",
+        help="Desactivar filtrado/notch previo a la extracción de features.",
+    )
+    parser.set_defaults(prefilter=True)
+    parser.add_argument(
+        "--bandpass-low",
+        type=float,
+        default=None,
+        help="Corte inferior del band-pass para features (Hz). Default: 0.3 Hz.",
+    )
+    parser.add_argument(
+        "--bandpass-high",
+        type=float,
+        default=None,
+        help="Corte superior del band-pass para features (Hz). Default: 45 Hz.",
+    )
+    parser.add_argument(
+        "--notch-freqs",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Frecuencias de notch (Hz), ej. 50 60. Default: 50 y 60 Hz.",
+    )
+    parser.add_argument(
+        "--psd-method",
+        choices=["welch", "multitaper"],
+        default="welch",
+        help="Método para PSD en features espectrales (welch o multitaper).",
+    )
+    parser.add_argument(
+        "--no-stage-stratify",
+        dest="stage_stratify",
+        action="store_false",
+        help="Desactivar estratificación por estadio a nivel sujeto_core en los splits.",
+    )
+    parser.add_argument(
+        "--keep-cross-single-eeg",
+        dest="skip_cross_if_single_eeg",
+        action="store_false",
+        help="Mantener features cross-channel aunque solo haya un EEG (por defecto se omiten).",
+    )
+    parser.set_defaults(stage_stratify=True, skip_cross_if_single_eeg=True)
+    parser.add_argument(
         "--sfreq",
         type=float,
         default=None,
@@ -983,6 +1174,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Número de folds para cross-validation",
     )
     parser.add_argument(
+        "--cv-strategy",
+        choices=["subject-kfold", "loso", "group-temporal"],
+        default="subject-kfold",
+        help="Estrategia de cross-validation: subject-kfold (default), "
+        "loso (leave-one-subject-out), group-temporal (respeta orden temporal por sujeto).",
+    )
+    parser.add_argument(
+        "--strict-class-coverage",
+        action="store_true",
+        help="Falla si algún split de CV carece de clases requeridas.",
+    )
+    parser.add_argument(
         "--save-metrics",
         action="store_true",
         default=True,
@@ -1052,10 +1255,20 @@ def main() -> int:
             val_size=args.val_size,
             limit=args.limit,
             epoch_length=args.epoch_length,
+            overlap=args.overlap,
             sfreq=args.sfreq,
+            prefilter=args.prefilter,
+            bandpass_low=args.bandpass_low,
+            bandpass_high=args.bandpass_high,
+            notch_freqs=args.notch_freqs,
+            psd_method=args.psd_method,
+            stage_stratify=args.stage_stratify,
+            skip_cross_if_single_eeg=args.skip_cross_if_single_eeg,
             features_file=args.features_file,
             sequence_length=args.sequence_length,
             temporal_split=args.temporal_split,
+            cv_strategy=args.cv_strategy,
+            strict_class_coverage=args.strict_class_coverage,
             **model_kwargs,
         )
         return 0

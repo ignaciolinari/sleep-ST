@@ -380,9 +380,10 @@ Los modelos entrenados se guardan en formato pickle junto con los nombres de las
 
 ### Recomendaciones de splits y modelos DL
 
-- Splits por sujeto: `test_size=0.2` funciona bien; si optimizas hiperparámetros activa `val_size` (p.ej. 0.2). Con menos de ~12–15 `subject_core` el CV será inestable; bajo 10 espera mayor varianza.
-- Cobertura de clases: el pipeline reintenta hasta que train/val/test contengan todas las clases presentes; si falla, reduce `test_size`/`val_size` o agrega sujetos.
-- Split temporal: `--temporal-split` hace holdout de las sesiones/noches más recientes por sujeto y usa `GroupTimeSeriesSplit` en CV; requiere `epoch_time_start` o `epoch_index`. Útil para estimar desempeño en noches futuras; si hay una sola sesión por sujeto, el comportamiento es equivalente al split por sujetos.
+- CV por sujeto (default): `--cross-validate --cv-strategy subject-kfold --cv-folds 5`. `test_size=0.2` suele ir bien; con <12–15 `subject_core` la varianza sube.
+- LOSO para sujetos no vistos: `--cross-validate --cv-strategy loso --strict-class-coverage`. Cada fold deja un sujeto completo fuera; ignora `test_size`.
+- Split temporal: `--temporal-split` o `--cv-strategy group-temporal` hacen holdout de las sesiones/noches más recientes por sujeto; requiere `epoch_time_start` o `epoch_index`.
+- Cobertura de clases: el split train/val/test reintenta hasta cubrir todas las clases presentes. En CV usa `--strict-class-coverage` para fallar si falta alguna clase en un fold.
 - LSTM `sequence_length`: default 5 (≈2.5 min a 30 s/epoch). Úsalo entre 5–10; verifica que cada sesión tenga al menos esa longitud para que se generen secuencias.
 - Pesos y normalización: RF/XGB usan `class_weight`/`sample_weight`; CNN1D/LSTM calculan `class_weight` y guardan estadísticas de normalización. La evaluación falla si faltan `scaler_` o `channel_means_/channel_stds_` para evitar leakage.
 
