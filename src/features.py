@@ -35,6 +35,10 @@ FREQ_BANDS = {
     "gamma": (30, 45),
 }
 
+# Parámetros de pre-filtrado por defecto
+DEFAULT_FILTER_BAND = (0.3, 45.0)
+DEFAULT_NOTCH_FREQS: tuple[float, ...] = (50.0, 60.0)
+
 # Estadios canónicos
 STAGE_CANONICAL = {
     "Sleep stage W": "W",
@@ -98,6 +102,7 @@ def load_psg_data(
 
 def load_hypnogram(
     hypnogram_path: Path | str,
+    movement_policy: str = "drop",
 ) -> pd.DataFrame:
     """Carga hipnograma desde archivo CSV.
 
@@ -116,8 +121,24 @@ def load_hypnogram(
     if not required_cols.issubset(df.columns):
         raise ValueError(f"El hipnograma debe contener las columnas: {required_cols}")
 
+    movement_policy = movement_policy.lower()
+    if movement_policy not in {"drop", "map_to_w", "keep_unknown"}:
+        raise ValueError("movement_policy debe ser 'drop', 'map_to_w' o 'keep_unknown'")
+
     df = df.copy()
-    df["stage"] = df["description"].map(STAGE_CANONICAL)
+
+    def _map_stage(desc: str | float) -> Optional[str]:
+        if isinstance(desc, float) and pd.isna(desc):
+            return None
+        if desc in {"Movement time", "Sleep stage ?"}:
+            if movement_policy == "drop":
+                return None
+            if movement_policy == "map_to_w":
+                return "W"
+            return "UNK"
+        return STAGE_CANONICAL.get(str(desc))
+
+    df["stage"] = df["description"].map(_map_stage)
     df = df[df["stage"].notna()].copy()
 
     return df
@@ -149,9 +170,21 @@ def create_epochs(
     times : np.ndarray
         Array con tiempos de inicio de cada epoch en segundos
     """
+    if epoch_length <= 0:
+        raise ValueError("epoch_length debe ser > 0")
+    if overlap < 0:
+        raise ValueError("overlap debe ser >= 0")
+    if overlap >= epoch_length:
+        raise ValueError("overlap debe ser menor que epoch_length")
+
     n_channels, n_samples = data.shape
     samples_per_epoch = int(epoch_length * sfreq)
     step = int((epoch_length - overlap) * sfreq)
+
+    if step <= 0:
+        raise ValueError(
+            "El paso de epoch debe ser > 0; reduce overlap o aumenta epoch_length"
+        )
 
     epochs = []
     times = []
@@ -208,6 +241,57 @@ def assign_stages_to_epochs(
             stages.append(stage)
 
     return np.array(stages)
+
+
+def _preprocess_channel(
+    data: np.ndarray,
+    sfreq: float,
+    bandpass: tuple[float, float] = DEFAULT_FILTER_BAND,
+    notch_freqs: tuple[float, ...] | list[float] | None = DEFAULT_NOTCH_FREQS,
+    detrend: bool = True,
+) -> np.ndarray:
+    """Aplicar detrend, band-pass y notch básicos a un canal 1D."""
+    cleaned = np.asarray(data, dtype=float)
+
+    if detrend:
+        try:
+            cleaned = signal.detrend(cleaned, type="linear")
+        except Exception as exc:
+            logging.debug("No se pudo aplicar detrend: %s", exc)
+
+    l_freq, h_freq = bandpass
+    try:
+        cleaned = mne.filter.filter_data(
+            cleaned,
+            sfreq=sfreq,
+            l_freq=l_freq,
+            h_freq=h_freq,
+            method="fir",
+            fir_design="firwin",
+            verbose="ERROR",
+        )
+    except Exception as exc:
+        logging.debug(
+            "No se pudo aplicar band-pass %.2f-%.2f Hz: %s", l_freq, h_freq, exc
+        )
+
+    if notch_freqs:
+        try:
+            nyq = sfreq / 2.0 if sfreq else 0.0
+            valid_notch = [f for f in notch_freqs if f and f < nyq]
+            if valid_notch:
+                cleaned = mne.filter.notch_filter(
+                    cleaned,
+                    Fs=sfreq,
+                    freqs=valid_notch,
+                    method="fir",
+                    fir_design="firwin",
+                    verbose="ERROR",
+                )
+        except Exception as exc:
+            logging.debug("No se pudo aplicar notch %s Hz: %s", notch_freqs, exc)
+
+    return cleaned
 
 
 def extract_spectral_features(
@@ -330,6 +414,8 @@ def extract_spectral_features(
 def extract_temporal_features(
     data: np.ndarray,
     ch_name: str,
+    sfreq: float,
+    epoch_length: float | None = None,
 ) -> dict[str, float]:
     """Extrae features temporales de la señal.
 
@@ -339,6 +425,10 @@ def extract_temporal_features(
         Señal 1D de forma (n_samples,)
     ch_name : str
         Nombre del canal
+    sfreq : float
+        Frecuencia de muestreo
+    epoch_length : float, optional
+        Duración del epoch en segundos (usado para entropía espectral si sfreq no está disponible)
 
     Returns
     -------
@@ -392,9 +482,17 @@ def extract_temporal_features(
 
     # Entropía espectral (informativa para estados de sueño)
     try:
-        freqs, psd = signal.welch(
-            data, fs=len(data) / 30.0, nperseg=min(256, len(data))
+        effective_epoch_length = (
+            epoch_length if epoch_length and epoch_length > 0 else None
         )
+        if sfreq and sfreq > 0:
+            sfreq_entropy = sfreq
+        elif effective_epoch_length:
+            sfreq_entropy = len(data) / effective_epoch_length
+        else:
+            sfreq_entropy = 1.0  # Evitar división por cero en casos extremos
+
+        freqs, psd = signal.welch(data, fs=sfreq_entropy, nperseg=min(256, len(data)))
         # Filtrar a banda de interés (0.5-45 Hz)
         freq_mask = (freqs >= 0.5) & (freqs <= 45)
         if freq_mask.any():
@@ -421,7 +519,7 @@ def extract_temporal_features(
 
 def extract_cross_channel_features(
     eeg1: np.ndarray,
-    eeg2: np.ndarray,
+    eeg2: np.ndarray | None,
     eog: np.ndarray,
     emg: np.ndarray,
     sfreq: float,
@@ -449,9 +547,11 @@ def extract_cross_channel_features(
     features = {}
 
     # Correlación entre canales EEG
-    if len(eeg1) == len(eeg2) and len(eeg1) > 0:
+    if eeg2 is not None and len(eeg1) == len(eeg2) and len(eeg1) > 0:
         corr_eeg = np.corrcoef(eeg1, eeg2)[0, 1]
         features["eeg_eeg_correlation"] = float(corr_eeg)
+    else:
+        features["eeg_eeg_correlation"] = np.nan
 
     # Correlación EEG-EOG (importante para REM)
     if len(eeg1) == len(eog) and len(eeg1) > 0:
@@ -555,14 +655,29 @@ def extract_spindle_features(
         return features
 
     try:
+        # Pre-filtrar en banda sigma para una detección más robusta
+        try:
+            data_sigma = mne.filter.filter_data(
+                data,
+                sfreq=sfreq,
+                l_freq=11.0,
+                h_freq=16.0,
+                method="fir",
+                fir_design="firwin",
+                verbose="ERROR",
+            )
+        except Exception:
+            data_sigma = data
+
         # YASA spindles_detect requiere datos en formato (n_samples,)
         # thresh: umbral para detección, valores bajos = más sensible
         sp = yasa.spindles_detect(
-            data,
+            data_sigma,
             sf=sfreq,
             freq_sp=(12, 15),  # Banda sigma estándar
             duration=(0.5, 2),  # Duración típica de spindles
             thresh={"rel_pow": 0.2, "corr": 0.65, "rms": 1.5},
+            remove_outliers=True,
             verbose=False,
         )
 
@@ -626,6 +741,11 @@ def extract_slow_wave_features(
         return features
 
     try:
+        try:
+            data = signal.detrend(data, type="linear")
+        except Exception:
+            pass
+
         # Filtrar en banda delta (0.5-4 Hz)
         nyq = sfreq / 2
         low = 0.5 / nyq
@@ -659,6 +779,10 @@ def extract_features_for_epoch(
     epoch: np.ndarray,
     ch_names: list[str],
     sfreq: float,
+    epoch_length: float = 30.0,
+    apply_prefilter: bool = True,
+    bandpass: tuple[float, float] = DEFAULT_FILTER_BAND,
+    notch_freqs: tuple[float, ...] | list[float] | None = DEFAULT_NOTCH_FREQS,
 ) -> dict[str, float]:
     """Extrae todas las features para un epoch.
 
@@ -670,6 +794,14 @@ def extract_features_for_epoch(
         Nombres de los canales
     sfreq : float
         Frecuencia de muestreo
+    epoch_length : float
+        Duración del epoch en segundos
+    apply_prefilter : bool
+        Si True, aplica detrend + band-pass + notch antes de extraer features
+    bandpass : tuple[float, float]
+        Banda del filtro pasa banda previa a la extracción
+    notch_freqs : tuple[float, ...] | list[float] | None
+        Frecuencias de notch a aplicar antes de las features
 
     Returns
     -------
@@ -693,20 +825,32 @@ def extract_features_for_epoch(
             emg_channels.append((idx, ch_name))
 
     # Features por canal
+    cleaned_epoch: list[np.ndarray] = []
+
     for idx, ch_name in enumerate(ch_names):
         ch_data = epoch[idx, :]
+        preprocessed = (
+            _preprocess_channel(
+                ch_data, sfreq, bandpass=bandpass, notch_freqs=notch_freqs
+            )
+            if apply_prefilter
+            else ch_data
+        )
+        cleaned_epoch.append(preprocessed)
 
         # Features espectrales
-        spectral = extract_spectral_features(ch_data, sfreq, ch_name)
+        spectral = extract_spectral_features(preprocessed, sfreq, ch_name)
         features.update(spectral)
 
         # Features temporales
-        temporal = extract_temporal_features(ch_data, ch_name)
+        temporal = extract_temporal_features(
+            preprocessed, ch_name, sfreq, epoch_length=epoch_length
+        )
         features.update(temporal)
 
     # Features de spindles y ondas lentas (solo para canales EEG)
     for idx, ch_name in eeg_channels:
-        ch_data = epoch[idx, :]
+        ch_data = cleaned_epoch[idx]
 
         # Detección de spindles (importantes para N2)
         spindle_feats = extract_spindle_features(ch_data, sfreq, ch_name)
@@ -722,17 +866,15 @@ def extract_features_for_epoch(
         eog_idx, eog_name = eog_channels[0]
         emg_idx, emg_name = emg_channels[0]
 
-        eeg1_data = epoch[eeg1_idx, :]
-        eog_data = epoch[eog_idx, :]
-        emg_data = epoch[emg_idx, :]
+        eeg1_data = cleaned_epoch[eeg1_idx]
+        eog_data = cleaned_epoch[eog_idx]
+        emg_data = cleaned_epoch[emg_idx]
 
         # Si hay segundo EEG, usarlo también
         eeg2_data = None
         if len(eeg_channels) > 1:
             eeg2_idx, _ = eeg_channels[1]
-            eeg2_data = epoch[eeg2_idx, :]
-        else:
-            eeg2_data = eeg1_data  # Usar el mismo si solo hay uno
+            eeg2_data = cleaned_epoch[eeg2_idx]
 
         cross_channel = extract_cross_channel_features(
             eeg1_data, eeg2_data, eog_data, emg_data, sfreq
@@ -748,6 +890,7 @@ def extract_features_from_session(
     epoch_length: float = 30.0,
     sfreq: Optional[float] = None,
     channels: Optional[list[str]] = None,
+    movement_policy: str = "drop",
 ) -> pd.DataFrame:
     """Extrae features para todos los epochs de una sesión.
 
@@ -771,7 +914,7 @@ def extract_features_from_session(
     """
     # Cargar datos
     data, actual_sfreq, ch_names = load_psg_data(psg_path, channels, sfreq)
-    hypnogram = load_hypnogram(hypnogram_path)
+    hypnogram = load_hypnogram(hypnogram_path, movement_policy=movement_policy)
 
     # Crear epochs
     epochs, epochs_times = create_epochs(data, actual_sfreq, epoch_length=epoch_length)
@@ -783,6 +926,17 @@ def extract_features_from_session(
     # Asignar estadios
     stages = assign_stages_to_epochs(epochs_times, hypnogram, epoch_length)
 
+    total_epochs = len(stages)
+    missing_labels = int(np.sum(pd.isna(stages)))
+    if missing_labels:
+        pct_missing = (missing_labels / total_epochs * 100) if total_epochs else 0.0
+        logging.info(
+            "Sesión %s: descartados %s epochs sin etiqueta (%.1f%%)",
+            psg_path,
+            missing_labels,
+            pct_missing,
+        )
+
     # Extraer features para cada epoch
     features_list = []
     for epoch_idx, (epoch, stage, epoch_time) in enumerate(
@@ -791,7 +945,9 @@ def extract_features_from_session(
         if stage is None:
             continue  # Saltar epochs sin etiqueta
 
-        epoch_features = extract_features_for_epoch(epoch, ch_names, actual_sfreq)
+        epoch_features = extract_features_for_epoch(
+            epoch, ch_names, actual_sfreq, epoch_length=epoch_length
+        )
         epoch_features["stage"] = stage
         epoch_features["epoch_time_start"] = epoch_time  # Tiempo de inicio del epoch
         epoch_features["epoch_index"] = (

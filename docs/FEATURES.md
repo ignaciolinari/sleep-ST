@@ -170,6 +170,8 @@ Para cada canal EEG:
 - La coherencia usa **scipy.signal.coherence** para un cálculo correcto
 - La entropía usa **scipy.stats.entropy** con 100 bins para mejor resolución
 - Las features están optimizadas para distinguir estadios de sueño con pocos canales (2 EEG + EOG + EMG)
+- Cada canal se prefiltra (0.3–45 Hz) con detrend y notch 50/60 Hz antes de extraer PSD, spindles o slow waves
+- Si sólo hay un EEG disponible, `eeg_eeg_correlation` se marca como NaN en lugar de duplicar el canal
 - El código maneja errores: si falla alguna feature, se asigna 0.0 en lugar de fallar
 - Los ratios espectrales usan epsilon (1e-10) para evitar división por cero
 

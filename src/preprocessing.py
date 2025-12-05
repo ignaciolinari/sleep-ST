@@ -349,11 +349,11 @@ def _process_session(
     min_episode_sleep_min: float,
     episode_strategy: str,
     overwrite: bool,
-    resample_sfreq: Optional[float],
-    l_freq: Optional[float],
-    h_freq: Optional[float],
-    notch_freqs: Optional[list[float]],
-    avg_ref: bool,
+    resample_sfreq: Optional[float] = None,
+    l_freq: Optional[float] = None,
+    h_freq: Optional[float] = None,
+    notch_freqs: Optional[list[float]] = None,
+    avg_ref: bool = False,
 ) -> list[TrimResult]:
     subject_id = row["subject_id"]
     subset = row["subset"]

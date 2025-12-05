@@ -179,6 +179,13 @@ class TestCreateEpochs:
         # Con solapamiento debe haber más epochs
         assert len(epochs_overlap) > len(epochs_no_overlap)
 
+    def test_create_epochs_invalid_overlap(self, sample_psg_data):
+        """Debe fallar si overlap es mayor o igual a epoch_length."""
+        data, sfreq = sample_psg_data
+
+        with pytest.raises(ValueError, match="overlap debe ser menor"):
+            create_epochs(data, sfreq, epoch_length=30.0, overlap=30.0)
+
     def test_create_epochs_empty(self):
         """Test creación de epochs con datos vacíos."""
         data = np.zeros((4, 100))  # Solo 100 muestras, menos de un epoch de 30s a 100Hz
@@ -257,8 +264,8 @@ class TestExtractTemporalFeatures:
 
     def test_extract_temporal_features_basic(self, sample_eeg_data):
         """Test extracción básica de features temporales."""
-        signal, _ = sample_eeg_data
-        features = extract_temporal_features(signal, "EEG Fpz-Cz")
+        signal, sfreq = sample_eeg_data
+        features = extract_temporal_features(signal, "EEG Fpz-Cz", sfreq)
 
         # Verificar estadísticas básicas
         assert "EEG Fpz-Cz_mean" in features
@@ -280,9 +287,10 @@ class TestExtractTemporalFeatures:
     def test_extract_temporal_features_2d_error(self):
         """Test que lanza error con datos 2D."""
         data_2d = np.random.randn(10, 100)
+        sfreq = 100.0
 
         with pytest.raises(ValueError, match="data debe ser 1D"):
-            extract_temporal_features(data_2d, "test")
+            extract_temporal_features(data_2d, "test", sfreq)
 
 
 class TestExtractCrossChannelFeatures:
@@ -316,6 +324,16 @@ class TestExtractCrossChannelFeatures:
         # Debe manejar graciosamente las diferencias de longitud
         # (algunas features pueden no calcularse)
         assert isinstance(features, dict)
+
+    def test_extract_cross_channel_single_eeg(self, sample_eeg_data):
+        """No debe inventar un segundo EEG cuando sólo hay uno."""
+        signal, sfreq = sample_eeg_data
+        eog = signal * 0.2
+        emg = signal * 0.1
+
+        features = extract_cross_channel_features(signal, None, eog, emg, sfreq)
+
+        assert np.isnan(features["eeg_eeg_correlation"])
 
 
 class TestExtractFeaturesForEpoch:

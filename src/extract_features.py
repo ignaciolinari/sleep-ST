@@ -30,6 +30,7 @@ def extract_and_save_features(
     epoch_length: float = 30.0,
     sfreq: float | None = None,
     format: str = "parquet",
+    movement_policy: str = "drop",
 ) -> None:
     """Extrae features y las guarda en un archivo.
 
@@ -111,6 +112,7 @@ def extract_and_save_features(
                 hyp_path,
                 epoch_length=epoch_length,
                 sfreq=sfreq,
+                movement_policy=movement_policy,
             )
 
             if not features_df.empty:
@@ -201,6 +203,12 @@ def main() -> int:
         default="parquet",
         help="Formato de salida (parquet es más eficiente)",
     )
+    parser.add_argument(
+        "--movement-policy",
+        choices=["drop", "map_to_w", "keep_unknown"],
+        default="drop",
+        help="Tratamiento de anotaciones 'Movement time' o '?' (drop por defecto)",
+    )
 
     args = parser.parse_args()
 
@@ -212,6 +220,7 @@ def main() -> int:
             epoch_length=args.epoch_length,
             sfreq=args.sfreq,
             format=args.format,
+            movement_policy=args.movement_policy,
         )
         return 0
     except Exception as e:

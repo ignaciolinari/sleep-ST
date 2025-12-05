@@ -32,6 +32,7 @@ def prepare_features_dataset(
     limit: Optional[int] = None,
     epoch_length: float = 30.0,
     sfreq: Optional[float] = None,
+    movement_policy: str = "drop",
 ) -> pd.DataFrame:
     """Prepara dataset de features desde múltiples sesiones.
 
@@ -110,6 +111,7 @@ def prepare_features_dataset(
                 hyp_path,
                 epoch_length=epoch_length,
                 sfreq=sfreq,
+                movement_policy=movement_policy,
             )
 
             if not features_df.empty:
@@ -148,6 +150,7 @@ def prepare_raw_epochs_dataset(
     epoch_length: float = 30.0,
     sfreq: Optional[float] = None,
     channels: Optional[list[str]] = None,
+    movement_policy: str = "drop",
 ) -> tuple[np.ndarray, np.ndarray, pd.DataFrame]:
     """Prepara dataset de epochs raw (señales) para modelos de deep learning.
 
@@ -231,7 +234,7 @@ def prepare_raw_epochs_dataset(
         try:
             # Cargar datos raw
             data, actual_sfreq, ch_names = load_psg_data(psg_path, channels, sfreq)
-            hypnogram = load_hypnogram(hyp_path)
+            hypnogram = load_hypnogram(hyp_path, movement_policy=movement_policy)
 
             # Crear epochs
             epochs, epochs_times = create_epochs(
