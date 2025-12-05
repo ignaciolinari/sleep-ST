@@ -337,6 +337,13 @@ python -m src.models \
   --model-type xgboost \
   --n-estimators 300 \
   --max-depth 8
+
+# Entrenamiento con split temporal (sesiones más recientes a test/val)
+python -m src.models \
+  --features-file data/processed/features.parquet \
+  --model-type random_forest \
+  --temporal-split \
+  --output-dir models_temporal
 ```
 
 **Uso programático:**
@@ -370,6 +377,14 @@ features_df = extract_features_from_session(
 ```
 
 Los modelos entrenados se guardan en formato pickle junto con los nombres de las features para facilitar la predicción posterior.
+
+### Recomendaciones de splits y modelos DL
+
+- Splits por sujeto: `test_size=0.2` funciona bien; si optimizas hiperparámetros activa `val_size` (p.ej. 0.2). Con menos de ~12–15 `subject_core` el CV será inestable; bajo 10 espera mayor varianza.
+- Cobertura de clases: el pipeline reintenta hasta que train/val/test contengan todas las clases presentes; si falla, reduce `test_size`/`val_size` o agrega sujetos.
+- Split temporal: `--temporal-split` hace holdout de las sesiones/noches más recientes por sujeto y usa `GroupTimeSeriesSplit` en CV; requiere `epoch_time_start` o `epoch_index`. Útil para estimar desempeño en noches futuras; si hay una sola sesión por sujeto, el comportamiento es equivalente al split por sujetos.
+- LSTM `sequence_length`: default 5 (≈2.5 min a 30 s/epoch). Úsalo entre 5–10; verifica que cada sesión tenga al menos esa longitud para que se generen secuencias.
+- Pesos y normalización: RF/XGB usan `class_weight`/`sample_weight`; CNN1D/LSTM calculan `class_weight` y guardan estadísticas de normalización. La evaluación falla si faltan `scaler_` o `channel_means_/channel_stds_` para evitar leakage.
 
 ## Calidad de código (pre-commit)
 Para mantener formato y checks automáticos antes de cada commit se usa pre-commit con Ruff/Black y validaciones básicas.

@@ -143,41 +143,31 @@ def evaluate_model(
             X_test_norm = X_test_scaled.reshape(
                 n_sequences, sequence_length, n_features
             )
-        else:
+        elif hasattr(model, "channel_means_") and hasattr(model, "channel_stds_"):
             # CNN1D: normalizar por canal usando estadísticas de train guardadas
-            if hasattr(model, "channel_means_") and hasattr(model, "channel_stds_"):
-                # Validar que las dimensiones coinciden
-                if X_test.shape[1] != len(model.channel_means_):
-                    raise ValueError(
-                        f"Dimensiones no coinciden: X_test tiene {X_test.shape[1]} canales, "
-                        f"pero el modelo espera {len(model.channel_means_)} canales"
-                    )
-
-                # Usar estadísticas de train guardadas
-                X_test_norm = np.zeros_like(X_test)
-                for ch_idx in range(X_test.shape[1]):
-                    ch_data = X_test[:, ch_idx, :]
-                    mean = model.channel_means_[ch_idx]
-                    std = model.channel_stds_[ch_idx]
-                    if std > 0:
-                        X_test_norm[:, ch_idx, :] = (ch_data - mean) / std
-                    else:
-                        X_test_norm[:, ch_idx, :] = ch_data
-            else:
-                # Fallback: normalizar con estadísticas de test
-                logging.warning(
-                    "No se encontraron estadísticas de normalización guardadas. "
-                    "Usando estadísticas de test (puede causar data leakage)."
+            # Validar que las dimensiones coinciden
+            if X_test.shape[1] != len(model.channel_means_):
+                raise ValueError(
+                    f"Dimensiones no coinciden: X_test tiene {X_test.shape[1]} canales, "
+                    f"pero el modelo espera {len(model.channel_means_)} canales"
                 )
-                X_test_norm = np.zeros_like(X_test)
-                for ch_idx in range(X_test.shape[1]):
-                    ch_data = X_test[:, ch_idx, :]
-                    mean = np.mean(ch_data)
-                    std = np.std(ch_data)
-                    if std > 0:
-                        X_test_norm[:, ch_idx, :] = (ch_data - mean) / std
-                    else:
-                        X_test_norm[:, ch_idx, :] = ch_data
+
+            # Usar estadísticas de train guardadas
+            X_test_norm = np.zeros_like(X_test)
+            for ch_idx in range(X_test.shape[1]):
+                ch_data = X_test[:, ch_idx, :]
+                mean = model.channel_means_[ch_idx]
+                std = model.channel_stds_[ch_idx]
+                if std > 0:
+                    X_test_norm[:, ch_idx, :] = (ch_data - mean) / std
+                else:
+                    X_test_norm[:, ch_idx, :] = ch_data
+        else:
+            raise ValueError(
+                "El modelo Keras no tiene estadísticas de normalización guardadas "
+                "(scaler_ o channel_means_/channel_stds_). Reentrena o guarda el modelo "
+                "con dichas estadísticas para evitar data leakage."
+            )
 
         # Predecir (retorna probabilidades)
         y_pred_proba = model.predict(X_test_norm, verbose=0)

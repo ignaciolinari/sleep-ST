@@ -318,3 +318,26 @@ class TestNormalizationConsistency:
         assert np.allclose(
             model.channel_stds_, train_stds
         ), "Estadísticas de train cambiaron"
+
+    def test_evaluate_model_raises_without_saved_stats(self):
+        """Falla duro si faltan estadísticas de normalización al evaluar."""
+        train_cnn1d, _, _, _, evaluate_model, STAGE_ORDER = _import_dl_models()
+
+        np.random.seed(123)
+        X_train = np.random.randn(20, 2, 200)
+        y_train = np.random.choice(STAGE_ORDER, size=20)
+        X_test = np.random.randn(5, 2, 200)
+        y_test = np.random.choice(STAGE_ORDER, size=5)
+
+        model = train_cnn1d(X_train, y_train, epochs=1, verbose=0)
+        # Simular un modelo cargado sin estadísticas
+        delattr(model, "channel_means_")
+
+        with pytest.raises(ValueError):
+            evaluate_model(
+                model,
+                X_test,
+                y_test,
+                stage_order=STAGE_ORDER,
+                dataset_name="TEST",
+            )

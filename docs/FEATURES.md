@@ -149,6 +149,7 @@ Para cada canal EEG:
 - `session_idx`: Índice de la sesión
 - `epoch_time_start`: Tiempo de inicio del epoch
 - `epoch_index`: Índice del epoch dentro de la sesión
+- `episode_index` / `episodes_total`: Identificadores cuando se segmentan múltiples episodios de sueño
 
 ---
 
@@ -170,10 +171,16 @@ Para cada canal EEG:
 - La coherencia usa **scipy.signal.coherence** para un cálculo correcto
 - La entropía usa **scipy.stats.entropy** con 100 bins para mejor resolución
 - Las features están optimizadas para distinguir estadios de sueño con pocos canales (2 EEG + EOG + EMG)
-- Cada canal se prefiltra (0.3–45 Hz) con detrend y notch 50/60 Hz antes de extraer PSD, spindles o slow waves
+- Cada canal se prefiltra (0.3–45 Hz) con detrend y notch 50/60 Hz antes de extraer PSD, spindles o slow waves; los flags permiten desactivar el filtrado/notch para comparar configuraciones.
 - Si sólo hay un EEG disponible, `eeg_eeg_correlation` se marca como NaN en lugar de duplicar el canal
 - El código maneja errores: si falla alguna feature, se asigna 0.0 en lugar de fallar
 - Los ratios espectrales usan epsilon (1e-10) para evitar división por cero
+
+### Splits y guardarraíles de modelado
+
+- Los splits se hacen por `subject_core` para evitar leakage; se reintenta hasta lograr cobertura de todas las clases presentes en train/val/test (o se lanza un error si es imposible con los tamaños solicitados).
+- Split temporal opcional por sesión/noches (`--temporal-split`): mantiene las sesiones más recientes en test/val y usa `GroupTimeSeriesSplit` en CV; requiere `epoch_time_start` o `epoch_index`.
+- Modelos CNN1D/LSTM guardan estadísticas de normalización (`channel_means_`/`channel_stds_` o `scaler_`) y la evaluación falla si no están presentes para evitar normalizar con datos de test.
 
 ---
 
@@ -187,6 +194,7 @@ Para cada canal EEG:
 - Mejorada entropía de Shannon (100 bins vs 20)
 - Corregido cálculo de coherencia usando scipy.signal.coherence
 - Corregida división por cero en ratios espectrales
+- Documentado filtrado/notch configurable y nuevos guardarraíles de splitting (cobertura de clases, split temporal opcional) y normalización obligatoria en DL
 
 ### v1.0.0
 - Versión inicial con features espectrales, temporales y entre canales

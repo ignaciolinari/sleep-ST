@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -404,12 +404,110 @@ def prepare_sequence_dataset(
     return X_seq, y, metadata_df
 
 
+def _log_class_distribution(
+    split_name: str, df: pd.DataFrame, stage_col: str = "stage"
+) -> None:
+    if stage_col in df.columns and not df.empty:
+        logging.info(
+            f"Distribución de clases ({split_name}):\n"
+            f"{df[stage_col].value_counts().sort_index()}"
+        )
+
+
+def _find_missing_classes(
+    df: pd.DataFrame, required_classes: Sequence[str], stage_col: str, split_name: str
+) -> list[str]:
+    present = set(df[stage_col].dropna().unique())
+    missing = [cls for cls in required_classes if cls not in present]
+    if missing:
+        logging.warning(
+            f"{split_name} sin cobertura de clases {missing}. "
+            "Probando un nuevo split..."
+        )
+    return missing
+
+
+def _temporal_split_by_session(
+    features_df: pd.DataFrame,
+    test_size: float,
+    val_size: Optional[float],
+    stratify_by: str,
+    session_col: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame]]:
+    if (
+        session_col not in features_df.columns
+        and "epoch_time_start" not in features_df.columns
+    ):
+        raise ValueError(
+            f"Se solicitó temporal_split pero no existen columnas '{session_col}' "
+            "ni 'epoch_time_start' para ordenar las sesiones."
+        )
+
+    if session_col not in features_df.columns:
+        # Derivar una pseudo sesión a partir de epoch_time_start (una sola sesión)
+        features_df = features_df.copy()
+        features_df[session_col] = 0
+
+    train_indices: list[int] = []
+    test_indices: list[int] = []
+    val_indices: list[int] = []
+
+    for _, group in features_df.groupby(stratify_by):
+        # Ordenar sesiones por sesión o tiempo
+        session_order = (
+            group.groupby(session_col)["epoch_time_start"].min().sort_values().index
+            if "epoch_time_start" in group.columns
+            else sorted(group[session_col].unique())
+        )
+        n_sessions = len(session_order)
+        if n_sessions == 0:
+            continue
+
+        n_test_sessions = max(1, int(np.ceil(n_sessions * test_size)))
+        n_val_sessions = int(np.ceil(n_sessions * val_size)) if val_size else 0
+
+        # Ajustar si no hay suficientes sesiones para val
+        if n_test_sessions + n_val_sessions >= n_sessions:
+            n_val_sessions = max(0, n_sessions - n_test_sessions - 1)
+
+        test_sessions = set(session_order[-n_test_sessions:])
+        val_sessions = (
+            set(session_order[-(n_test_sessions + n_val_sessions) : -n_test_sessions])
+            if n_val_sessions > 0
+            else set()
+        )
+        train_sessions = set(session_order) - test_sessions - val_sessions
+
+        train_indices.extend(
+            group[group[session_col].isin(train_sessions)].index.tolist()
+        )
+        test_indices.extend(
+            group[group[session_col].isin(test_sessions)].index.tolist()
+        )
+        if val_sessions:
+            val_indices.extend(
+                group[group[session_col].isin(val_sessions)].index.tolist()
+            )
+
+    train_df = features_df.loc[train_indices]
+    test_df = features_df.loc[test_indices]
+    val_df = features_df.loc[val_indices] if val_indices else None
+
+    return train_df, test_df, val_df
+
+
 def prepare_train_test_split(
     features_df: pd.DataFrame,
     test_size: float = 0.2,
     val_size: Optional[float] = None,
     random_state: int = 42,
     stratify_by: Optional[str] = "subject_core",
+    *,
+    ensure_class_coverage: bool = True,
+    required_classes: Optional[Sequence[str]] = None,
+    max_attempts: int = 100,
+    temporal_split: bool = False,
+    session_col: str = "session_idx",
 ) -> tuple[pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame]]:
     """Divide dataset en train/test/val respetando sujetos.
 
@@ -428,6 +526,20 @@ def prepare_train_test_split(
         Semilla aleatoria
     stratify_by : str, optional
         Columna para estratificar (default: 'subject_core')
+    ensure_class_coverage : bool
+        Si True, garantiza que cada split contenga todas las clases disponibles
+        en el dataset (hasta max_attempts intentos). Requiere columna 'stage'.
+    required_classes : Sequence[str], optional
+        Clases a verificar. Si None, usa STAGE_ORDER. Se ignoran las que no
+        estén presentes en el dataset.
+    max_attempts : int
+        Número máximo de intentos para lograr cobertura de clases.
+    temporal_split : bool
+        Si True, usa un split temporal por sesión dentro de cada sujeto
+        (holdout de las sesiones más recientes) en lugar de un split aleatorio
+        por sujetos.
+    session_col : str
+        Nombre de la columna que identifica la sesión (para temporal_split).
 
     Returns
     -------
@@ -438,33 +550,144 @@ def prepare_train_test_split(
     val_df : pd.DataFrame, optional
         DataFrame de validación
     """
+    if required_classes is None:
+        required_classes = STAGE_ORDER
+
+    if ensure_class_coverage and "stage" not in features_df.columns:
+        raise ValueError(
+            "ensure_class_coverage=True requiere la columna 'stage' en features_df."
+        )
+
     if stratify_by and stratify_by in features_df.columns:
         subject_cores = features_df[stratify_by].unique()
         n_cores = len(subject_cores)
 
-        np.random.seed(random_state)
-        shuffled_cores = np.random.permutation(subject_cores)
-
-        # Calcular tamaños
-        n_test_cores = max(1, int(n_cores * test_size))
-        n_val_cores = max(1, int(n_cores * val_size)) if val_size is not None else 0
-
-        # Dividir subject_cores
-        test_cores = set(shuffled_cores[:n_test_cores])
-        val_cores = (
-            set(shuffled_cores[n_test_cores : n_test_cores + n_val_cores])
-            if val_size
-            else set()
+        classes_in_data = (
+            sorted(features_df["stage"].dropna().unique())
+            if ensure_class_coverage and "stage" in features_df.columns
+            else []
         )
-        train_cores = set(shuffled_cores[n_test_cores + n_val_cores :])
-
-        # Asignar epochs según subject_core
-        train_df = features_df[features_df[stratify_by].isin(train_cores)]
-        test_df = features_df[features_df[stratify_by].isin(test_cores)]
-        val_df = (
-            features_df[features_df[stratify_by].isin(val_cores)] if val_size else None
+        classes_to_check = (
+            [cls for cls in required_classes if cls in classes_in_data]
+            if ensure_class_coverage
+            else []
         )
+        if ensure_class_coverage and classes_to_check and not temporal_split:
+            splits_needed = 3 if val_size else 2
+            class_core_counts = features_df.groupby("stage")[stratify_by].nunique()
+            impossible = [
+                cls
+                for cls in classes_to_check
+                if class_core_counts.get(cls, 0) < splits_needed
+            ]
+            if impossible:
+                raise ValueError(
+                    "No hay suficientes subject_cores por clase para cubrir "
+                    f"train/test{'/val' if val_size else ''}: {impossible}"
+                )
+        if ensure_class_coverage and required_classes:
+            missing_overall = [
+                cls for cls in required_classes if cls not in classes_in_data
+            ]
+            if missing_overall:
+                logging.warning(
+                    "Clases ausentes en el dataset y no se validarán en los splits: "
+                    f"{missing_overall}"
+                )
 
+        if temporal_split:
+            train_df, test_df, val_df = _temporal_split_by_session(
+                features_df,
+                test_size=test_size,
+                val_size=val_size,
+                stratify_by=stratify_by,
+                session_col=session_col,
+            )
+            if ensure_class_coverage and classes_to_check:
+                missing = {}
+                missing_train = _find_missing_classes(
+                    train_df, classes_to_check, "stage", "train"
+                )
+                missing_test = _find_missing_classes(
+                    test_df, classes_to_check, "stage", "test"
+                )
+                missing_val = (
+                    _find_missing_classes(val_df, classes_to_check, "stage", "val")
+                    if val_df is not None
+                    else []
+                )
+                if missing_train:
+                    missing["train"] = missing_train
+                if missing_test:
+                    missing["test"] = missing_test
+                if missing_val:
+                    missing["val"] = missing_val
+                if missing:
+                    raise ValueError(
+                        "Split temporal sin cobertura de clases: "
+                        f"{missing}. Ajusta tamaños o datos."
+                    )
+        else:
+            rng = np.random.default_rng(random_state)
+
+            # Intentar hasta max_attempts encontrar un split con cobertura de clases
+            for attempt in range(1, max_attempts + 1):
+                shuffled_cores = rng.permutation(subject_cores)
+
+                n_test_cores = max(1, int(n_cores * test_size))
+                n_val_cores = (
+                    max(1, int(n_cores * val_size)) if val_size is not None else 0
+                )
+
+                test_cores = set(shuffled_cores[:n_test_cores])
+                val_cores = (
+                    set(shuffled_cores[n_test_cores : n_test_cores + n_val_cores])
+                    if val_size
+                    else set()
+                )
+                train_cores = set(shuffled_cores[n_test_cores + n_val_cores :])
+
+                train_df = features_df[features_df[stratify_by].isin(train_cores)]
+                test_df = features_df[features_df[stratify_by].isin(test_cores)]
+                val_df = (
+                    features_df[features_df[stratify_by].isin(val_cores)]
+                    if val_size
+                    else None
+                )
+
+                if not ensure_class_coverage or "stage" not in features_df.columns:
+                    break
+
+                missing = {}
+                if classes_to_check:
+                    missing_train = _find_missing_classes(
+                        train_df, classes_to_check, "stage", "train"
+                    )
+                    missing_test = _find_missing_classes(
+                        test_df, classes_to_check, "stage", "test"
+                    )
+                    if val_df is not None:
+                        missing_val = _find_missing_classes(
+                            val_df, classes_to_check, "stage", "val"
+                        )
+                    else:
+                        missing_val = []
+
+                    if missing_train:
+                        missing["train"] = missing_train
+                    if missing_test:
+                        missing["test"] = missing_test
+                    if missing_val:
+                        missing["val"] = missing_val
+
+                if not missing:
+                    break
+
+                if attempt == max_attempts:
+                    raise ValueError(
+                        "No se pudo generar un split con cobertura de clases "
+                        f"en {max_attempts} intentos. Faltantes: {missing}"
+                    )
         # Logging
         total_epochs = len(features_df)
         train_pct = (len(train_df) / total_epochs * 100) if total_epochs > 0 else 0
@@ -506,6 +729,13 @@ def prepare_train_test_split(
             logging.warning("⚠️  OVERLAP detectado entre train y val!")
         if test_set & val_set:
             logging.warning("⚠️  OVERLAP detectado entre test y val!")
+
+        # Logging de distribución de clases por split
+        if "stage" in features_df.columns:
+            _log_class_distribution("Train", train_df)
+            if val_df is not None:
+                _log_class_distribution("Val", val_df)
+            _log_class_distribution("Test", test_df)
     else:
         # División simple (no recomendado)
         logging.warning(

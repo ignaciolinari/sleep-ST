@@ -291,6 +291,7 @@ def run_training_pipeline(
     sfreq: Optional[float] = None,
     features_file: Optional[Path | str] = None,
     sequence_length: int = 5,  # Para LSTM
+    temporal_split: bool = False,
     **model_kwargs,
 ) -> dict:
     """Ejecuta pipeline completo de entrenamiento y evaluación.
@@ -317,6 +318,9 @@ def run_training_pipeline(
         Requerido para LSTM, opcional para otros modelos.
     sequence_length : int
         Longitud de secuencias para LSTM (default: 5 epochs)
+    temporal_split : bool
+        Si True, usa splits temporales por sesión dentro de cada sujeto para
+        train/val/test y CV (holdout de sesiones recientes).
     **model_kwargs
         Argumentos adicionales para el modelo
 
@@ -332,6 +336,9 @@ def run_training_pipeline(
         raise ImportError(
             f"TensorFlow no está disponible. Instala TensorFlow para usar el modelo {model_type}."
         )
+
+    # Permitir que temporal_split llegue vía model_kwargs pero no se propague a los entrenadores
+    temporal_split = bool(temporal_split or model_kwargs.pop("temporal_split", False))
 
     # Detectar contexto: primera corrida vs corrida avanzada
     output_dir_path = Path(output_dir)
@@ -460,37 +467,31 @@ def run_training_pipeline(
         else:  # lstm
             X_data, y_data = X_seq, y_seq
 
-        # Dividir por subject_core
-        subject_cores = metadata_df["subject_core"].unique()
-        n_cores = len(subject_cores)
-        np.random.seed(42)
-        shuffled_cores = np.random.permutation(subject_cores)
+        # Usar lógica común de splitting con verificación de cobertura de clases
+        metadata_with_labels = metadata_df.copy()
+        metadata_with_labels["stage"] = y_data
 
-        n_test_cores = max(1, int(n_cores * test_size))
-        n_val_cores = max(1, int(n_cores * val_size)) if val_size else 0
-
-        test_cores = set(shuffled_cores[:n_test_cores])
-        val_cores = (
-            set(shuffled_cores[n_test_cores : n_test_cores + n_val_cores])
-            if val_size
-            else set()
-        )
-        train_cores = set(shuffled_cores[n_test_cores + n_val_cores :])
-
-        train_mask = metadata_df["subject_core"].isin(train_cores)
-        test_mask = metadata_df["subject_core"].isin(test_cores)
-        val_mask = (
-            metadata_df["subject_core"].isin(val_cores)
-            if val_size
-            else pd.Series([False] * len(metadata_df))
+        train_meta, test_meta, val_meta = prepare_train_test_split(
+            metadata_with_labels,
+            test_size=test_size,
+            val_size=val_size,
+            random_state=42,
+            stratify_by="subject_core",
+            ensure_class_coverage=True,
+            temporal_split=temporal_split,
+            session_col="session_idx",
         )
 
-        X_train = X_data[train_mask.values]
-        y_train = y_data[train_mask.values]
-        X_test = X_data[test_mask.values]
-        y_test = y_data[test_mask.values]
-        X_val = X_data[val_mask.values] if val_size else None
-        y_val = y_data[val_mask.values] if val_size else None
+        train_idx = train_meta.index.to_numpy()
+        test_idx = test_meta.index.to_numpy()
+        val_idx = val_meta.index.to_numpy() if val_meta is not None else None
+
+        X_train = X_data[train_idx]
+        y_train = y_data[train_idx]
+        X_test = X_data[test_idx]
+        y_test = y_data[test_idx]
+        X_val = X_data[val_idx] if val_meta is not None else None
+        y_val = y_data[val_idx] if val_meta is not None else None
 
         logging.info(f"Train: {len(X_train)} muestras")
         logging.info(f"Test: {len(X_test)} muestras")
@@ -649,11 +650,23 @@ def run_training_pipeline(
     cv_folds = model_kwargs.pop("cv_folds", 5)
 
     if use_cv:
-        # Cross-validation respetando grupos y tiempo
-        logging.info(f"Modo: Cross-validation ({cv_folds} folds)")
+        # Cross-validation respetando grupos y, opcionalmente, tiempo
+        logging.info(
+            f"Modo: Cross-validation {'temporal ' if temporal_split else ''}({cv_folds} folds)"
+        )
         logging.info(f"Test size: {test_size}")
-        cv = SubjectTimeSeriesSplit(n_splits=cv_folds, test_size=test_size)
         groups = combined_df["subject_core"]
+        if temporal_split:
+            if not {"epoch_index", "epoch_time_start"} & set(combined_df.columns):
+                raise ValueError(
+                    "Se solicitó temporal_split pero no hay columnas temporales "
+                    "('epoch_index' o 'epoch_time_start') en los datos."
+                )
+            cv = GroupTimeSeriesSplit(n_splits=cv_folds, test_size=test_size)
+            X_full_for_split = combined_df
+        else:
+            cv = SubjectTimeSeriesSplit(n_splits=cv_folds, test_size=test_size)
+            X_full_for_split = None
 
         # Crear modelo base
         if model_type == "random_forest":
@@ -673,7 +686,7 @@ def run_training_pipeline(
             groups,
             cv,
             scoring="f1_macro",
-            X_full=None,  # No necesario para SubjectTimeSeriesSplit
+            X_full=X_full_for_split,
         )
 
         # Entrenar modelo final con todos los datos de train
@@ -682,7 +695,11 @@ def run_training_pipeline(
         logging.info("=" * 60)
         logging.info("Dividiendo datos para entrenamiento final...")
         train_df, test_df, val_df = prepare_train_test_split(
-            combined_df, test_size=test_size, val_size=val_size
+            combined_df,
+            test_size=test_size,
+            val_size=val_size,
+            ensure_class_coverage=True,
+            temporal_split=temporal_split,
         )
         X_train = train_df[feature_cols]
         y_train = train_df["stage"]
@@ -710,7 +727,11 @@ def run_training_pipeline(
         if val_size:
             logging.info(f"Validation size: {val_size}")
         train_df, test_df, val_df = prepare_train_test_split(
-            combined_df, test_size=test_size, val_size=val_size
+            combined_df,
+            test_size=test_size,
+            val_size=val_size,
+            ensure_class_coverage=True,
+            temporal_split=temporal_split,
         )
         X_train = train_df[feature_cols]
         y_train = train_df["stage"]
@@ -881,6 +902,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=5,
         help="Longitud de secuencias para LSTM (número de epochs consecutivos, default: 5)",
     )
+    parser.add_argument(
+        "--temporal-split",
+        action="store_true",
+        help="Usar split temporal por sesión dentro de cada sujeto (holdout de sesiones recientes) "
+        "para train/val/test y cross-validation.",
+    )
     # Parámetros específicos de Deep Learning
     parser.add_argument(
         "--n-filters",
@@ -1028,6 +1055,7 @@ def main() -> int:
             sfreq=args.sfreq,
             features_file=args.features_file,
             sequence_length=args.sequence_length,
+            temporal_split=args.temporal_split,
             **model_kwargs,
         )
         return 0
