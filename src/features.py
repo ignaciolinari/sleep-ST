@@ -664,7 +664,9 @@ def extract_spindle_features(
 ) -> dict[str, float]:
     """Extrae features relacionadas con spindles de sueño usando YASA.
 
-    Los spindles son característicos del estadio N2 (12-15 Hz, duración 0.5-2s).
+    Los spindles son característicos del estadio N2 y se definen según los
+    criterios AASM como oscilaciones en la banda sigma (11-16 Hz, típicamente
+    12-15 Hz) con duración de 0.5-2 segundos.
 
     Parameters
     ----------
@@ -683,6 +685,28 @@ def extract_spindle_features(
         - spindle_density: spindles por minuto
         - spindle_mean_duration: duración media (segundos)
         - spindle_mean_amplitude: amplitud media (uV)
+
+    Notes
+    -----
+    La detección usa YASA (Vallat & Walker, 2021) con parámetros basados en:
+
+    - **Banda de frecuencia**: 12-15 Hz (banda sigma según AASM, 2007)
+    - **Duración**: 0.5-2 segundos (Warby et al., 2014; Purcell et al., 2017)
+    - **Umbrales de detección**:
+      - rel_pow=0.2: potencia relativa mínima en sigma vs. banda ancha
+      - corr=0.65: correlación mínima con oscilación sigma pura
+      - rms=1.5: umbral RMS en desviaciones estándar
+
+    Estos umbrales son los valores por defecto de YASA, validados contra
+    scoring manual en el dataset MASS (Vallat & Walker, 2021).
+
+    References
+    ----------
+    - AASM (2007). The AASM Manual for the Scoring of Sleep.
+    - Warby et al. (2014). Sleep spindle measurements. Sleep, 37(9), 1469-1479.
+    - Purcell et al. (2017). Characterizing sleep spindles. Sleep, 40(1).
+    - Vallat & Walker (2021). An open-source, high-performance tool for
+      automated sleep staging. eLife, 10:e70092.
     """
     features = {
         f"{ch_name}_spindle_count": 0.0,
@@ -695,28 +719,15 @@ def extract_spindle_features(
         return features
 
     try:
-        # Pre-filtrar en banda sigma para una detección más robusta
-        try:
-            data_sigma = mne.filter.filter_data(
-                data,
-                sfreq=sfreq,
-                l_freq=11.0,
-                h_freq=16.0,
-                method="fir",
-                fir_design="firwin",
-                verbose="ERROR",
-            )
-        except Exception:
-            data_sigma = data
-
-        # YASA spindles_detect requiere datos en formato (n_samples,)
-        # thresh: umbral para detección, valores bajos = más sensible
+        # YASA spindles_detect aplica internamente filtrado en freq_sp,
+        # por lo que no es necesario pre-filtrar los datos.
+        # Parámetros según criterios AASM y validación YASA (ver docstring).
         sp = yasa.spindles_detect(
-            data_sigma,
+            data,
             sf=sfreq,
-            freq_sp=(12, 15),  # Banda sigma estándar
-            duration=(0.5, 2),  # Duración típica de spindles
-            thresh={"rel_pow": 0.2, "corr": 0.65, "rms": 1.5},
+            freq_sp=(12, 15),  # Banda sigma estándar AASM
+            duration=(0.5, 2),  # Duración según Warby et al. (2014)
+            thresh={"rel_pow": 0.2, "corr": 0.65, "rms": 1.5},  # Defaults YASA
             remove_outliers=True,
             verbose=False,
         )

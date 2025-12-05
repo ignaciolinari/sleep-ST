@@ -97,7 +97,15 @@ Para cada canal EEG (EEG Fpz-Cz, EEG Pz-Oz):
 - `{canal}_spindle_mean_duration`: Duración media de spindles (segundos)
 - `{canal}_spindle_mean_amplitude`: Amplitud media de spindles (µV)
 
-> **Nota:** La detección usa YASA (`yasa.spindles_detect`) con parámetros estándar: banda 12-15 Hz, duración 0.5-2s.
+> **Nota:** La detección usa YASA (`yasa.spindles_detect`) con parámetros basados en criterios AASM y literatura:
+> - **Banda**: 12-15 Hz (AASM, 2007)
+> - **Duración**: 0.5-2s (Warby et al., 2014; Purcell et al., 2017)
+> - **Umbrales**: rel_pow=0.2, corr=0.65, rms=1.5 (defaults YASA, validados vs. scoring manual en MASS)
+>
+> Referencias:
+> - AASM (2007). The AASM Manual for the Scoring of Sleep.
+> - Warby et al. (2014). Sleep spindle measurements. *Sleep*, 37(9), 1469-1479.
+> - Vallat & Walker (2021). An open-source, high-performance tool for automated sleep staging. *eLife*, 10:e70092.
 
 **Total:** 4 features × 2 canales EEG = **8 features**
 

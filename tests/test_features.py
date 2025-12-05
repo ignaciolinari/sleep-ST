@@ -405,3 +405,88 @@ class TestExtractFeaturesFromSession:
 
         # Debe retornar DataFrame vacío
         assert df.empty
+
+
+class TestReproducibility:
+    """Tests de reproducibilidad para validación científica."""
+
+    def test_extract_features_reproducibility(
+        self, sample_fif_file, sample_hypnogram_csv
+    ):
+        """Test que la extracción de features es determinista.
+
+        Ejecutar dos veces con los mismos datos debe producir resultados
+        idénticos. Esto es crítico para reproducibilidad científica.
+        """
+        # Primera extracción
+        df1 = extract_features_from_session(
+            sample_fif_file,
+            sample_hypnogram_csv,
+            epoch_length=30.0,
+        )
+
+        # Segunda extracción con los mismos parámetros
+        df2 = extract_features_from_session(
+            sample_fif_file,
+            sample_hypnogram_csv,
+            epoch_length=30.0,
+        )
+
+        # Verificar que ambos DataFrames son idénticos
+        assert df1.shape == df2.shape, "Los DataFrames deben tener la misma forma"
+        assert list(df1.columns) == list(df2.columns), "Las columnas deben ser iguales"
+
+        # Comparar valores numéricos (excluyendo columnas de metadata string)
+        numeric_cols = df1.select_dtypes(include=[np.number]).columns
+        for col in numeric_cols:
+            np.testing.assert_array_almost_equal(
+                df1[col].values,
+                df2[col].values,
+                decimal=10,
+                err_msg=f"Columna {col} no es reproducible",
+            )
+
+        # Verificar que las etiquetas de estadio son idénticas
+        assert (df1["stage"] == df2["stage"]).all(), "Los estadios deben ser idénticos"
+
+    def test_extract_features_epoch_reproducibility(self, sample_psg_data):
+        """Test que features de un epoch individual son reproducibles."""
+        data, sfreq = sample_psg_data
+        epoch_length = 30.0
+        n_samples = int(epoch_length * sfreq)
+        epoch = data[:, :n_samples]
+        ch_names = ["EEG Fpz-Cz", "EEG Pz-Oz", "EOG horizontal", "EMG submental"]
+
+        # Primera extracción
+        features1 = extract_features_for_epoch(epoch, ch_names, sfreq)
+
+        # Segunda extracción
+        features2 = extract_features_for_epoch(epoch, ch_names, sfreq)
+
+        # Verificar que las features son idénticas
+        assert set(features1.keys()) == set(
+            features2.keys()
+        ), "Las keys deben ser iguales"
+
+        for key in features1.keys():
+            np.testing.assert_almost_equal(
+                features1[key],
+                features2[key],
+                decimal=10,
+                err_msg=f"Feature {key} no es reproducible",
+            )
+
+    def test_spectral_features_reproducibility(self, sample_eeg_data):
+        """Test que features espectrales son reproducibles."""
+        signal, sfreq = sample_eeg_data
+
+        features1 = extract_spectral_features(signal, sfreq, "EEG_test")
+        features2 = extract_spectral_features(signal, sfreq, "EEG_test")
+
+        for key in features1.keys():
+            np.testing.assert_almost_equal(
+                features1[key],
+                features2[key],
+                decimal=10,
+                err_msg=f"Feature espectral {key} no es reproducible",
+            )
