@@ -106,8 +106,10 @@ def train_xgboost(
         model.fit(X_train, y_train_encoded)
 
     # Guardar LabelEncoder y clases originales
+    # Nota: XGBoost ya tiene classes_ como propiedad de solo lectura después de fit()
+    # Usamos label_encoder_ para decodificación en evaluate_model y pipeline
     model.label_encoder_ = le
-    model.original_classes_ = le.classes_
+    model.original_classes_ = le.classes_  # Alias para compatibilidad
 
     logging.info(f"✓ Entrenamiento completado: XGBoost con {len(X_train)} muestras")
     logging.info("=" * 60)

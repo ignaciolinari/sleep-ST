@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 pytest.importorskip("yasa")
@@ -29,6 +31,52 @@ def test_prepare_train_test_split_preserves_class_coverage():
 
     assert set(train_df["stage"].unique()) == set(stages)
     assert set(test_df["stage"].unique()) == set(stages)
+
+
+def test_prepare_train_test_split_val_size_zero_disables_val(caplog):
+    df = pd.DataFrame(
+        {
+            "stage": ["W", "N1", "W", "N1"],
+            "subject_core": ["A", "A", "B", "B"],
+            "session_idx": [0, 0, 1, 1],
+        }
+    )
+
+    with caplog.at_level(logging.WARNING):
+        train_df, test_df, val_df = prepare_train_test_split(
+            df,
+            test_size=0.5,
+            val_size=0,
+            random_state=0,
+            ensure_class_coverage=True,
+            required_classes=["W", "N1"],
+        )
+
+    assert val_df is None
+    assert not train_df.empty and not test_df.empty
+    assert any(
+        "val_size <= 0 detectado; se desactiva el split de validación" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_prepare_train_test_split_invalid_test_size():
+    df = pd.DataFrame(
+        {
+            "stage": ["W", "N1"],
+            "subject_core": ["A", "B"],
+            "session_idx": [0, 1],
+        }
+    )
+
+    with pytest.raises(ValueError, match="test_size debe ser mayor que 0"):
+        prepare_train_test_split(
+            df,
+            test_size=0,
+            val_size=None,
+            random_state=0,
+            ensure_class_coverage=False,
+        )
 
 
 def test_prepare_train_test_split_detects_missing_class():

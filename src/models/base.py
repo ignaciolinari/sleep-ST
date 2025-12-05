@@ -366,11 +366,34 @@ def save_model(model, path: Path | str) -> None:
         Modelo entrenado (sklearn, XGBoost, o Keras)
     path : Path | str
         Ruta donde guardar el modelo
+
+    Warnings
+    --------
+    Emite warnings si faltan atributos críticos para la correcta
+    evaluación del modelo (label_encoder_, estadísticas de normalización).
     """
     path = Path(path)
 
     # Detectar si es modelo de Keras
     is_keras_model = TF_AVAILABLE and isinstance(model, keras.Model)
+
+    # Verificar atributos críticos y emitir warnings
+    if is_keras_model:
+        if not hasattr(model, "label_encoder_"):
+            logging.warning(
+                "Modelo Keras sin label_encoder_: la decodificación de predicciones "
+                "puede fallar al cargar el modelo."
+            )
+        # Verificar estadísticas de normalización según el tipo de modelo
+        has_cnn_stats = hasattr(model, "channel_means_") and hasattr(
+            model, "channel_stds_"
+        )
+        has_lstm_stats = hasattr(model, "scaler_")
+        if not has_cnn_stats and not has_lstm_stats:
+            logging.warning(
+                "Modelo Keras sin estadísticas de normalización (channel_means_/stds_ "
+                "o scaler_): evaluate_model fallará al evaluar en nuevos datos."
+            )
 
     if is_keras_model:
         # Guardar modelo de Keras

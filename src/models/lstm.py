@@ -231,6 +231,23 @@ def train_lstm(
     # Preparar datos de validación si existen
     validation_data = None
     if X_val is not None and y_val is not None:
+        # Verificar que no hay clases desconocidas en validación
+        unknown_classes = set(y_val) - set(le.classes_)
+        if unknown_classes:
+            logging.warning(
+                f"Clases en validación no vistas en train: {unknown_classes}. "
+                "Estas muestras serán filtradas."
+            )
+            # Filtrar muestras con clases desconocidas
+            valid_mask = np.isin(y_val, le.classes_)
+            X_val = X_val[valid_mask]
+            y_val = y_val[valid_mask]
+            if len(y_val) == 0:
+                logging.warning("No quedan muestras de validación después de filtrar.")
+                X_val = None
+                y_val = None
+
+    if X_val is not None and y_val is not None:
         y_val_encoded = le.transform(y_val)
         n_val_sequences = X_val.shape[0]
         X_val_reshaped = X_val.reshape(-1, n_features)

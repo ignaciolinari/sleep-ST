@@ -424,8 +424,8 @@ def extract_spectral_features(
                     features[f"{ch_name}_dominant_freq"] = float(
                         freqs_filtered[dominant_freq_idx]
                     )
-        except Exception:
-            pass  # Si falla, simplemente no agregar esta feature
+        except Exception as e:
+            logging.debug(f"Error calculando frecuencia dominante para {ch_name}: {e}")
 
     except Exception as e:
         logging.warning(f"Error extrayendo features espectrales para {ch_name}: {e}")
@@ -485,7 +485,8 @@ def extract_temporal_features(
         features[f"{ch_name}_hjorth_activity"] = float(hjorth[0])
         features[f"{ch_name}_hjorth_mobility"] = float(hjorth[1])
         features[f"{ch_name}_hjorth_complexity"] = float(hjorth[2])
-    except Exception:
+    except Exception as e:
+        logging.debug(f"Error calculando parámetros Hjorth para {ch_name}: {e}")
         features[f"{ch_name}_hjorth_activity"] = 0.0
         features[f"{ch_name}_hjorth_mobility"] = 0.0
         features[f"{ch_name}_hjorth_complexity"] = 0.0
@@ -508,7 +509,8 @@ def extract_temporal_features(
                 features[f"{ch_name}_entropy"] = 0.0
         else:
             features[f"{ch_name}_entropy"] = 0.0
-    except Exception:
+    except Exception as e:
+        logging.debug(f"Error calculando entropía de Shannon para {ch_name}: {e}")
         features[f"{ch_name}_entropy"] = 0.0
 
     # Entropía espectral (informativa para estados de sueño)
@@ -538,7 +540,8 @@ def extract_temporal_features(
                 features[f"{ch_name}_spectral_entropy"] = 0.0
         else:
             features[f"{ch_name}_spectral_entropy"] = 0.0
-    except Exception:
+    except Exception as e:
+        logging.debug(f"Error calculando entropía espectral para {ch_name}: {e}")
         features[f"{ch_name}_spectral_entropy"] = 0.0
 
     # Zero crossing rate
@@ -645,7 +648,8 @@ def extract_cross_channel_features(
             features["eeg_eog_theta_coherence"] = 0.0
             features["eeg_eog_delta_coherence"] = 0.0
             features["eeg_eog_sigma_coherence"] = 0.0
-    except Exception:
+    except Exception as e:
+        logging.debug(f"Error calculando coherencia EEG-EOG: {e}")
         features["eeg_eog_theta_coherence"] = 0.0
         features["eeg_eog_delta_coherence"] = 0.0
         features["eeg_eog_sigma_coherence"] = 0.0
@@ -779,8 +783,8 @@ def extract_slow_wave_features(
     try:
         try:
             data = signal.detrend(data, type="linear")
-        except Exception:
-            pass
+        except Exception as e:
+            logging.debug(f"Error en detrend para slow wave features {ch_name}: {e}")
 
         # Filtrar en banda delta (0.5-4 Hz)
         nyq = sfreq / 2

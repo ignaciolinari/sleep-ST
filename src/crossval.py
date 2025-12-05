@@ -247,9 +247,9 @@ class SubjectTimeSeriesSplit(BaseCrossValidator):
         # Calcular tamaño del test
         n_test_cores = max(1, int(n_cores * self.test_size))
 
-        # Generar folds
-        np.random.seed(42)  # Para reproducibilidad
-        shuffled_cores = np.random.permutation(unique_cores)
+        # Generar folds usando Generator para evitar afectar estado global
+        rng = np.random.default_rng(42)
+        shuffled_cores = rng.permutation(unique_cores)
 
         for fold in range(self.n_splits):
             # Rotar qué sujetos van a test en cada fold

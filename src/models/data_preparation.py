@@ -605,6 +605,15 @@ def prepare_train_test_split(
     if required_classes is None:
         required_classes = STAGE_ORDER
 
+    # Normalizar valores de split para robustez (aceptar val_size=0 como "sin val")
+    if val_size is not None and val_size <= 0:
+        logging.warning(
+            "val_size <= 0 detectado; se desactiva el split de validación (val_size=None)."
+        )
+        val_size = None
+    if test_size <= 0:
+        raise ValueError("test_size debe ser mayor que 0.")
+
     if ensure_class_coverage and "stage" not in features_df.columns:
         raise ValueError(
             "ensure_class_coverage=True requiere la columna 'stage' en features_df."
@@ -613,6 +622,15 @@ def prepare_train_test_split(
     if stratify_by and stratify_by in features_df.columns:
         subject_cores = features_df[stratify_by].unique()
         n_cores = len(subject_cores)
+
+        # Validación temprana: verificar que hay suficientes sujetos para los splits
+        min_cores_needed = 2 if val_size is None else 3
+        if n_cores < min_cores_needed:
+            raise ValueError(
+                f"Dataset muy pequeño: {n_cores} {stratify_by}(s). "
+                f"Se necesitan al menos {min_cores_needed} para generar "
+                f"{'train/test' if val_size is None else 'train/val/test'} splits."
+            )
 
         classes_in_data = (
             sorted(features_df["stage"].dropna().unique())
