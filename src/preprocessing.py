@@ -349,6 +349,11 @@ def _process_session(
     min_episode_sleep_min: float,
     episode_strategy: str,
     overwrite: bool,
+    resample_sfreq: Optional[float],
+    l_freq: Optional[float],
+    h_freq: Optional[float],
+    notch_freqs: Optional[list[float]],
+    avg_ref: bool,
 ) -> list[TrimResult]:
     subject_id = row["subject_id"]
     subset = row["subset"]
@@ -471,6 +476,18 @@ def _process_session(
                 subject_id,
                 idx,
             )
+            filter_note = []
+            if l_freq is not None or h_freq is not None:
+                filter_note.append(
+                    f"BP {l_freq if l_freq is not None else 0.0}-{h_freq if h_freq is not None else 'nyq'} Hz"
+                )
+            if resample_sfreq:
+                filter_note.append(f"Resample {resample_sfreq} Hz")
+            if notch_freqs:
+                filter_note.append("Notch " + ",".join(str(f) for f in notch_freqs))
+            if avg_ref:
+                filter_note.append("AvgRef EEG")
+            extra_note = "; ".join(filter_note)
             results.append(
                 TrimResult(
                     subject_id,
@@ -488,13 +505,18 @@ def _process_session(
                     episode_index=idx,
                     episodes_total=episodes_total,
                     episode_strategy=episode_strategy,
-                    notes="Reuse",
+                    notes="Reuse" + (f" | {extra_note}" if extra_note else ""),
                 )
             )
             continue
 
         try:
             raw = mne.io.read_raw_edf(psg_path, preload=True, verbose="ERROR")
+            if (
+                resample_sfreq
+                and abs(raw.info.get("sfreq", 0.0) - resample_sfreq) > 1e-3
+            ):
+                raw.resample(resample_sfreq, npad="auto", verbose="ERROR")
             recording_tmax = raw.times[-1]
             effective_trim_end = min(trim_end, recording_tmax)
             if effective_trim_end <= trim_start:
@@ -533,6 +555,45 @@ def _process_session(
 
             raw.crop(tmin=trim_start, tmax=trim_end)
             raw.set_annotations(trimmed_annotations)
+
+            # Opcional: filtrado band-pass y notch, y re-referenciado
+            if l_freq is not None or h_freq is not None:
+                raw.filter(
+                    l_freq=l_freq,
+                    h_freq=h_freq,
+                    method="fir",
+                    fir_design="firwin",
+                    verbose="ERROR",
+                )
+            if notch_freqs:
+                sfreq = raw.info.get("sfreq", 0.0) or 0.0
+                nyq = sfreq / 2.0 if sfreq else 0.0
+                safe_notch: list[float] = []
+                for f in notch_freqs:
+                    if not nyq or f >= nyq:
+                        continue
+                    # Alejarse del Nyquist para evitar ValueError interno
+                    if nyq - f < 1.0:
+                        safe_notch.append(nyq - 1.0)
+                    else:
+                        safe_notch.append(f)
+                if not safe_notch:
+                    logging.warning(
+                        "Notch omitido para %s: freqs %s no son válidas con sfreq=%.2f",
+                        subject_id,
+                        notch_freqs,
+                        sfreq,
+                    )
+                else:
+                    raw.notch_filter(
+                        freqs=safe_notch,
+                        method="fir",
+                        fir_design="firwin",
+                        notch_widths=1.0,
+                        verbose="ERROR",
+                    )
+            if avg_ref:
+                raw.set_eeg_reference("average", verbose="ERROR")
             raw.save(psg_out, overwrite=True)
 
             ann_df = pd.DataFrame(
@@ -566,6 +627,30 @@ def _process_session(
             )
             continue
 
+        filter_note = []
+        if l_freq is not None or h_freq is not None:
+            filter_note.append(
+                f"BP {l_freq if l_freq is not None else 0.0}-{h_freq if h_freq is not None else 'nyq'} Hz"
+            )
+        if resample_sfreq:
+            filter_note.append(f"Resample {resample_sfreq} Hz")
+        if notch_freqs:
+            filter_note.append("Notch " + ",".join(str(f) for f in notch_freqs))
+        if avg_ref:
+            filter_note.append("AvgRef EEG")
+        filter_note_str = "; ".join(filter_note)
+
+        base_note = (
+            "Episodio recortado"
+            if episodes_total == 1
+            else f"Episodio {idx}/{episodes_total}"
+        ) + (
+            " (ajustado al límite del PSG)"
+            if abs(trim_end - episode["trim_end"]) > 1e-6
+            else ""
+        )
+        final_note = base_note + (f" | {filter_note_str}" if filter_note_str else "")
+
         results.append(
             TrimResult(
                 subject_id,
@@ -583,16 +668,7 @@ def _process_session(
                 episode_index=idx,
                 episodes_total=episodes_total,
                 episode_strategy=episode_strategy,
-                notes=(
-                    "Episodio recortado"
-                    if episodes_total == 1
-                    else f"Episodio {idx}/{episodes_total}"
-                )
-                + (
-                    " (ajustado al límite del PSG)"
-                    if abs(trim_end - episode["trim_end"]) > 1e-6
-                    else ""
-                ),
+                notes=final_note,
             )
         )
 
@@ -628,6 +704,11 @@ def run(args: argparse.Namespace) -> int:
             args.min_episode_min,
             args.episode_strategy,
             args.overwrite,
+            args.resample_sfreq,
+            args.filter_lowcut,
+            args.filter_highcut,
+            args.notch_freqs,
+            args.avg_ref,
         )
         results.extend(res_items)
 
@@ -706,6 +787,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--overwrite", action="store_true", help="Reescribir archivos existentes"
+    )
+    parser.add_argument(
+        "--filter-lowcut",
+        type=float,
+        default=None,
+        help="Corte inferior del band-pass (Hz). None = sin filtro pasa-altas.",
+    )
+    parser.add_argument(
+        "--filter-highcut",
+        type=float,
+        default=None,
+        help="Corte superior del band-pass (Hz). None = sin filtro pasa-bajas.",
+    )
+    parser.add_argument(
+        "--resample-sfreq",
+        type=float,
+        default=None,
+        help="Re-muestrear PSG a esta frecuencia (Hz) antes de filtrar. None = sin re-muestreo.",
+    )
+    parser.add_argument(
+        "--notch-freqs",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Frecuencias de notch (Hz), p.ej. 50 o 50 60. None = sin notch.",
+    )
+    parser.add_argument(
+        "--avg-ref",
+        action="store_true",
+        help="Aplicar referencia promedio a canales EEG tras filtrar.",
     )
     return parser
 

@@ -189,6 +189,15 @@ python src/preprocessing.py --limit 5
 # Reescribir si ya existen salidas
 python src/preprocessing.py --overwrite
 
+# (Opcional) Filtrar y notch sin tocar los recortes existentes
+python src/preprocessing.py \
+   --manifest data/processed/manifest.csv \
+   --out-root data/processed/sleep_trimmed_filt \
+   --out-manifest data/processed/manifest_trimmed_filt.csv \
+   --pre-padding 900 --post-padding 900 \
+   --filter-lowcut 0.3 --filter-highcut 45 --notch-freqs 50 \
+   --avg-ref
+
 # Segmentar episodios de sueño fragmentado
 python src/preprocessing.py \
    --episode-strategy all \
