@@ -69,11 +69,16 @@ def load_psg_data(
     Returns
     -------
     data : np.ndarray
-        Array de forma (n_channels, n_samples)
+        Array de forma (n_channels, n_samples) en microvolts (µV)
     sfreq : float
         Frecuencia de muestreo
     ch_names : list[str]
         Nombres de los canales cargados
+
+    Notes
+    -----
+    Los datos se escalan de Voltios (unidad de MNE) a Microvolts (µV),
+    ya que YASA y otras librerías de análisis de sueño esperan µV.
     """
     raw = mne.io.read_raw_fif(str(psg_path), preload=True, verbose="ERROR")
 
@@ -94,7 +99,9 @@ def load_psg_data(
         raw.resample(sfreq)
         current_sfreq = sfreq
 
-    data = raw.get_data()
+    # MNE almacena datos en Voltios, pero YASA espera Microvolts (µV)
+    # Escalar V → µV (multiplicar por 1e6)
+    data = raw.get_data() * 1e6
     ch_names = raw.ch_names
 
     return data, current_sfreq, ch_names

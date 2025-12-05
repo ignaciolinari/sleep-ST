@@ -50,6 +50,52 @@ STAGE_CANONICAL = {
 
 SLEEP_STAGES = {"N1", "N2", "N3", "REM"}
 
+# Mapeo de nombres de canal a tipos correctos para Sleep-EDF.
+# Los archivos EDF originales no especifican tipos correctamente,
+# causando que MNE clasifique todo como 'eeg'.
+CHANNEL_TYPE_MAPPING = {
+    "EEG Fpz-Cz": "eeg",
+    "EEG Pz-Oz": "eeg",
+    "EOG horizontal": "eog",
+    "Resp oro-nasal": "misc",
+    "EMG submental": "emg",
+    "Temp rectal": "misc",
+    "Event marker": "stim",
+}
+
+
+def _fix_channel_types(raw: mne.io.Raw) -> mne.io.Raw:
+    """Corrige los tipos de canal para archivos Sleep-EDF.
+
+    Los archivos EDF de Sleep-EDF no especifican correctamente los tipos
+    de canal, lo que causa que MNE clasifique todos los canales como 'eeg'.
+    Esto es problemático cuando se aplica referencia promedio, ya que
+    incluiría canales no-EEG (temperatura, EMG, etc.) en el cálculo.
+
+    Parameters
+    ----------
+    raw : mne.io.Raw
+        Objeto Raw con canales posiblemente mal clasificados.
+
+    Returns
+    -------
+    mne.io.Raw
+        El mismo objeto Raw con tipos de canal corregidos.
+    """
+    types_to_set = {}
+    for ch_name in raw.ch_names:
+        if ch_name in CHANNEL_TYPE_MAPPING:
+            current_type = raw.get_channel_types([ch_name])[0]
+            expected_type = CHANNEL_TYPE_MAPPING[ch_name]
+            if current_type != expected_type:
+                types_to_set[ch_name] = expected_type
+
+    if types_to_set:
+        raw.set_channel_types(types_to_set, verbose="ERROR")
+        logging.debug("Tipos de canal corregidos: %s", types_to_set)
+
+    return raw
+
 
 @dataclass
 class TrimResult:
@@ -512,6 +558,9 @@ def _process_session(
 
         try:
             raw = mne.io.read_raw_edf(psg_path, preload=True, verbose="ERROR")
+            # Corregir tipos de canal antes de cualquier procesamiento
+            # (necesario para que avg_ref solo use canales EEG reales)
+            _fix_channel_types(raw)
             if (
                 resample_sfreq
                 and abs(raw.info.get("sfreq", 0.0) - resample_sfreq) > 1e-3
