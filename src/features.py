@@ -597,7 +597,9 @@ def extract_cross_channel_features(
         # Si se exige EEG2 y no está disponible, omitir la feature
         return features
     else:
-        features["eeg_eeg_correlation"] = np.nan
+        # Sin segundo EEG: conservar la columna pero sin introducir NaNs para evitar
+        # romper modelos clásicos (RF/XGB). Interpretamos “sin información” como 0.0.
+        features["eeg_eeg_correlation"] = 0.0
 
     # Correlación EEG-EOG (importante para REM)
     if len(eeg1) == len(eog) and len(eeg1) > 0:

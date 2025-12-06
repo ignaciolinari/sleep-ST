@@ -100,74 +100,98 @@ class GroupTimeSeriesSplit(BaseCrossValidator):
         # Obtener grupos únicos y ordenarlos
         unique_groups = np.sort(groups.unique())
 
-        # Usar TimeSeriesSplit dentro de cada grupo
-        # Calcular n_splits por grupo basado en test_size si se especifica
+        # Precalcular índices ordenados por grupo
+        group_sorted_indices: dict[str, np.ndarray] = {}
+        for group in unique_groups:
+            group_mask = groups == group
+            group_indices = np.where(group_mask)[0]
+            if len(group_indices) < 2:
+                continue
+            group_df = X.loc[group_indices].copy()
+            group_df = group_df.sort_values(time_col)
+            group_sorted_indices[group] = group_df.index.values
+
+        # Ruta A: test_size explícito → construir ventanas temporales con tamaño fijo
         if self.test_size is not None:
-            # Estimar n_splits basado en test_size
-            # Si test_size=0.2, necesitamos ~5 folds para cubrir toda la serie
-            estimated_n_splits = max(2, int(1.0 / self.test_size))
-            n_splits_per_group = min(self.n_splits, estimated_n_splits)
-        else:
-            n_splits_per_group = self.n_splits
-
-        # Crear TimeSeriesSplit
-        tscv = TimeSeriesSplit(
-            n_splits=n_splits_per_group,
-            max_train_size=self.max_train_size,
-            test_size=None,  # sklearn no tiene test_size, lo calculamos nosotros
-        )
-
-        # Para cada fold global, combinar splits de todos los grupos
-        for global_fold in range(self.n_splits):
-            train_indices = []
-            test_indices = []
-
-            for group in unique_groups:
-                group_mask = groups == group
-                group_indices = np.where(group_mask)[0]
-
-                if len(group_indices) < 2:
-                    continue
-
-                # Ordenar por tiempo dentro del grupo
-                group_df = X.loc[group_indices].copy()
-                group_df = group_df.sort_values(time_col)
-                sorted_indices = group_df.index.values
+            # Determinar cuántos folds son posibles respetando el tamaño de test y la cantidad de datos
+            per_group_folds = []
+            for sorted_indices in group_sorted_indices.values():
                 n_group = len(sorted_indices)
+                test_len = max(1, int(np.ceil(n_group * self.test_size)))
+                valid_folds = 0
+                for fold_idx in range(self.n_splits):
+                    start = n_group - (fold_idx + 1) * test_len
+                    if start <= 0:
+                        continue
+                    train_end = max(0, start - self.gap)
+                    if train_end <= 0:
+                        continue
+                    valid_folds += 1
+                per_group_folds.append(valid_folds)
 
-                # Aplicar TimeSeriesSplit dentro del grupo
-                # Usar el fold correspondiente (wrap around si es necesario)
-                group_fold = global_fold % n_splits_per_group
+            max_global_folds = min(
+                self.n_splits, max(per_group_folds) if per_group_folds else 0
+            )
 
-                # Crear array temporal para TimeSeriesSplit
-                group_array = np.arange(n_group)
+            for global_fold in range(max_global_folds):
+                train_indices = []
+                test_indices = []
 
-                try:
-                    # Obtener splits para este grupo
-                    group_splits = list(tscv.split(group_array))
-                    if group_fold < len(group_splits):
+                for sorted_indices in group_sorted_indices.values():
+                    n_group = len(sorted_indices)
+                    test_len = max(1, int(np.ceil(n_group * self.test_size)))
+                    start = n_group - (global_fold + 1) * test_len
+                    if start <= 0:
+                        continue
+                    train_end = max(0, start - self.gap)
+                    if train_end <= 0:
+                        continue
+
+                    train_indices.extend(sorted_indices[:train_end])
+                    test_indices.extend(sorted_indices[start : start + test_len])
+
+                if len(train_indices) > 0 and len(test_indices) > 0:
+                    yield (
+                        np.array(train_indices, dtype=int),
+                        np.array(test_indices, dtype=int),
+                    )
+        else:
+            # Ruta B: comportamiento anterior (TimeSeriesSplit) cuando no se especifica test_size
+            tscv = TimeSeriesSplit(
+                n_splits=self.n_splits,
+                max_train_size=self.max_train_size,
+                test_size=None,
+            )
+
+            for global_fold in range(self.n_splits):
+                train_indices = []
+                test_indices = []
+
+                for sorted_indices in group_sorted_indices.values():
+                    n_group = len(sorted_indices)
+                    group_array = np.arange(n_group)
+                    try:
+                        group_splits = list(tscv.split(group_array))
+                        group_fold = global_fold % len(group_splits)
                         train_group_idx, test_group_idx = group_splits[group_fold]
 
-                        # Aplicar gap si está especificado
                         if self.gap > 0 and len(train_group_idx) > 0:
                             max_train_idx = train_group_idx[-1]
                             test_group_idx = test_group_idx[
                                 test_group_idx > max_train_idx + self.gap
                             ]
 
-                        # Mapear de índices del grupo a índices globales
                         train_indices.extend(sorted_indices[train_group_idx])
                         if len(test_group_idx) > 0:
                             test_indices.extend(sorted_indices[test_group_idx])
-                except ValueError:
-                    # Si el grupo es muy pequeño, saltarlo
-                    continue
+                    except ValueError:
+                        continue
 
-            if len(train_indices) > 0 and len(test_indices) > 0:
-                yield (
-                    np.array(train_indices, dtype=int),
-                    np.array(test_indices, dtype=int),
-                )
+                if len(train_indices) > 0 and len(test_indices) > 0:
+                    yield (
+                        np.array(train_indices, dtype=int),
+                        np.array(test_indices, dtype=int),
+                    )
 
     def get_n_splits(
         self,
@@ -176,7 +200,42 @@ class GroupTimeSeriesSplit(BaseCrossValidator):
         groups: Optional[pd.Series] = None,
     ) -> int:
         """Retorna el número de folds."""
-        return self.n_splits
+        if X is None or groups is None or self.test_size is None:
+            return self.n_splits
+
+        # Calcular folds efectivos según tamaño de test y longitud de cada grupo
+        if "epoch_index" in X.columns:
+            time_col = "epoch_index"
+        elif "epoch_time_start" in X.columns:
+            time_col = "epoch_time_start"
+        else:
+            return self.n_splits
+
+        groups_series = groups
+        unique_groups = np.sort(groups_series.unique())
+
+        max_folds = 0
+        for group in unique_groups:
+            group_mask = groups_series == group
+            group_indices = np.where(group_mask)[0]
+            if len(group_indices) < 2:
+                continue
+            group_df = X.loc[group_indices].copy()
+            group_df = group_df.sort_values(time_col)
+            n_group = len(group_df)
+            test_len = max(1, int(np.ceil(n_group * self.test_size)))
+            valid_folds = 0
+            for fold_idx in range(self.n_splits):
+                start = n_group - (fold_idx + 1) * test_len
+                if start <= 0:
+                    continue
+                train_end = max(0, start - self.gap)
+                if train_end <= 0:
+                    continue
+                valid_folds += 1
+            max_folds = max(max_folds, valid_folds)
+
+        return min(self.n_splits, max_folds if max_folds > 0 else self.n_splits)
 
 
 class SubjectTimeSeriesSplit(BaseCrossValidator):

@@ -39,6 +39,9 @@ python -m src.models --features-file data/processed/features.parquet --model-typ
 | [Kaggle Notebooks](docs/KAGGLE_NOTEBOOKS.md) | Entrenar modelos DL en Kaggle con GPU |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | FAQ y solución de problemas comunes |
 
+> **Validación por defecto (generalización a sujetos nuevos)**
+> El pipeline usa `cv_strategy="loso"` (Leave-One-Subject-Out) por defecto, de modo que cada fold deja fuera un sujeto completo. Los splits train/test también se hacen por `subject_core`, evitando leakage entre epochs de un mismo sujeto. Solo usa `group-temporal` si necesitas evaluar separación temporal dentro del mismo sujeto; en ese caso pasa explícitamente `--cv-strategy group-temporal`.
+
 ## Estructura del proyecto
 
 ```

@@ -116,18 +116,23 @@ def extract_and_save_features(
             subset = row.get("subset", "sleep-cassette")
             version = row.get("version", "1.0.0")
 
-            psg_path = (
-                manifest_dir
-                / "sleep_trimmed"
-                / "psg"
-                / f"{subject_id}_{subset}_{version}_trimmed_raw.fif"
-            )
-            hyp_path = (
-                manifest_dir
-                / "sleep_trimmed"
-                / "hypnograms"
-                / f"{subject_id}_{subset}_{version}_trimmed_annotations.csv"
-            )
+            base_name = f"{subject_id}_{subset}_{version}_trimmed"
+            psg_dir = manifest_dir / "sleep_trimmed" / "psg"
+            hyp_dir = manifest_dir / "sleep_trimmed" / "hypnograms"
+
+            # Buscar cualquier episodio (e1ofN) si existe; si no, usar nombre base
+            psg_candidates = sorted(psg_dir.glob(f"{base_name}*.fif"))
+            hyp_candidates = sorted(hyp_dir.glob(f"{base_name}*_annotations.csv"))
+
+            if psg_candidates:
+                psg_path = psg_candidates[0]
+            else:
+                psg_path = psg_dir / f"{base_name}_raw.fif"
+
+            if hyp_candidates:
+                hyp_path = hyp_candidates[0]
+            else:
+                hyp_path = hyp_dir / f"{base_name}_annotations.csv"
 
         if not psg_path.exists() or not hyp_path.exists():
             logging.warning(

@@ -334,7 +334,7 @@ def run_training_pipeline(
     features_file: Optional[Path | str] = None,
     sequence_length: int = 5,  # Para LSTM
     temporal_split: bool = False,
-    cv_strategy: str = "subject-kfold",
+    cv_strategy: str = "loso",
     strict_class_coverage: bool = False,
     overlap: float = 0.0,
     prefilter: bool = True,
@@ -1176,9 +1176,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--cv-strategy",
         choices=["subject-kfold", "loso", "group-temporal"],
-        default="subject-kfold",
-        help="Estrategia de cross-validation: subject-kfold (default), "
-        "loso (leave-one-subject-out), group-temporal (respeta orden temporal por sujeto).",
+        default="loso",
+        help="Estrategia de cross-validation: loso (leave-one-subject-out, default), "
+        "subject-kfold, group-temporal (respeta orden temporal por sujeto).",
     )
     parser.add_argument(
         "--strict-class-coverage",
