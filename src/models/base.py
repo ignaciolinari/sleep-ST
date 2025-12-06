@@ -54,6 +54,11 @@ except ImportError:
     optuna = None
     TPESampler = None
     MedianPruner = None
+    logging.info(
+        "Optuna no esta instalado. La optimizacion de hiperparametros usara "
+        "busqueda manual basica. Para mejor rendimiento, instala Optuna: "
+        "pip install optuna"
+    )
 
 
 def _configure_tensorflow_cpu_only() -> None:

@@ -114,9 +114,13 @@ def optimize_hyperparameters_bayesian(
     def objective(trial: optuna.Trial) -> float:
         """Función objetivo para Optuna."""
         if model_type == "random_forest":
+            # max_depth: incluir None (sin límite) como opción válida
+            max_depth_choice = trial.suggest_categorical(
+                "max_depth", [None, 10, 15, 20, 30, 40, 50]
+            )
             params = {
                 "n_estimators": trial.suggest_int("n_estimators", 100, 500),
-                "max_depth": trial.suggest_int("max_depth", 5, 50),
+                "max_depth": max_depth_choice,
                 "min_samples_split": trial.suggest_int("min_samples_split", 2, 20),
                 "min_samples_leaf": trial.suggest_int("min_samples_leaf", 1, 10),
                 "max_features": trial.suggest_categorical(

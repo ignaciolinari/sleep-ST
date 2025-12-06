@@ -71,3 +71,6 @@ build/
 
 # Vintage (archivos antiguos)
 vintage/
+
+# archivos potenciales (todavia no se si implementar)
+future/

@@ -17,6 +17,10 @@ def train_xgboost(
     n_estimators: int = 200,
     max_depth: int = 6,
     learning_rate: float = 0.1,
+    subsample: float = 0.8,
+    colsample_bytree: float = 0.8,
+    reg_alpha: float = 0.01,
+    reg_lambda: float = 1.0,
     random_state: int = 42,
     n_jobs: int = -1,
     scale_pos_weight: Optional[float] = None,
@@ -35,6 +39,14 @@ def train_xgboost(
         Profundidad máxima de los árboles
     learning_rate : float
         Tasa de aprendizaje
+    subsample : float
+        Fracción de muestras para entrenar cada árbol (default: 0.8)
+    colsample_bytree : float
+        Fracción de features para cada árbol (default: 0.8)
+    reg_alpha : float
+        Regularización L1 (default: 0.01)
+    reg_lambda : float
+        Regularización L2 (default: 1.0)
     random_state : int
         Semilla aleatoria
     n_jobs : int
@@ -54,6 +66,10 @@ def train_xgboost(
     logging.info(f"  - Número de árboles: {n_estimators}")
     logging.info(f"  - Profundidad máxima: {max_depth}")
     logging.info(f"  - Tasa de aprendizaje: {learning_rate}")
+    logging.info(f"  - Subsample: {subsample}")
+    logging.info(f"  - Colsample bytree: {colsample_bytree}")
+    logging.info(f"  - Regularización L1 (alpha): {reg_alpha}")
+    logging.info(f"  - Regularización L2 (lambda): {reg_lambda}")
     logging.info(f"  - Jobs paralelos: {n_jobs}")
     logging.info("Datos de entrenamiento:")
     logging.info(f"  - Muestras: {len(X_train)}")
@@ -95,6 +111,10 @@ def train_xgboost(
         n_estimators=n_estimators,
         max_depth=max_depth,
         learning_rate=learning_rate,
+        subsample=subsample,
+        colsample_bytree=colsample_bytree,
+        reg_alpha=reg_alpha,
+        reg_lambda=reg_lambda,
         random_state=random_state,
         n_jobs=n_jobs,
         eval_metric="mlogloss",
