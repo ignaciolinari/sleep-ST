@@ -226,8 +226,11 @@ def cross_validate_model(
             model_fold.fit(
                 X_train_fold, y_train_fold_encoded, sample_weight=sample_weight_fold
             )
+            # Guardar encoder para decodificar predicciones en evaluación
             model_fold.label_encoder_ = le_fold
-            model_fold.classes_ = le_fold.classes_  # Guardar clases para decodificación
+            # XGBoost expone classes_ como propiedad de solo lectura; guardamos clases
+            # originales en un atributo auxiliar compatible con evaluate_model
+            model_fold.original_classes_ = le_fold.classes_
         else:
             model_fold.fit(X_train_fold, y_train_fold)
         logging.info(
