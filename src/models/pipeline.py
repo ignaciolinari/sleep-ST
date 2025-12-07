@@ -5,8 +5,10 @@ funciones de evaluación, y utilidades para detección de primera corrida.
 """
 
 import argparse
+import json
 import logging
 import pickle
+import time
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -64,6 +66,8 @@ def cross_validate_model(
     X_full: Optional[pd.DataFrame] = None,
     required_classes: Optional[Sequence[str]] = None,
     strict_class_coverage: bool = False,
+    progress_path: Optional[Path] = None,
+    resume_progress: bool = False,
 ) -> dict:
     """Realiza cross-validation respetando grupos (subject-level).
 
@@ -118,6 +122,26 @@ def cross_validate_model(
     logging.info(f"Métrica de evaluación: {scoring}")
     logging.info(f"Total de muestras: {len(X)}")
     logging.info(f"Total de grupos (subject_cores): {groups.nunique()}")
+    logging.info(f"Inicio de CV: {n_splits} folds")
+    t_cv_start = time.perf_counter()
+
+    # Reanudar progreso si existe un archivo previo
+    existing_progress: dict[int, dict] = {}
+    if resume_progress and progress_path is not None and progress_path.exists():
+        try:
+            for line in progress_path.read_text().splitlines():
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                fold_id = int(record.get("fold", -1))
+                if fold_id >= 0:
+                    existing_progress[fold_id] = record
+            if existing_progress:
+                logging.info(
+                    f"Reanudando CV: se recuperaron {len(existing_progress)} folds desde {progress_path}"
+                )
+        except Exception as e:  # pragma: no cover
+            logging.warning(f"No se pudo leer progreso previo de CV: {e}")
 
     for fold_idx, (train_idx, test_idx) in enumerate(cv.split(X_for_split, y, groups)):
         logging.info(f"\n--- Fold {fold_idx + 1}/{n_splits} ---")
@@ -157,7 +181,22 @@ def cross_validate_model(
                 f"test faltan: {missing_test or 'ninguna'}"
             )
 
+        if fold_idx in existing_progress:
+            prev_score = existing_progress[fold_idx].get("score")
+            logging.info(
+                "  Saltando fold %d: ya completado (score guardado: %s)"
+                % (
+                    fold_idx + 1,
+                    f"{prev_score:.4f}" if prev_score is not None else "NA",
+                )
+            )
+            score_to_add = prev_score if prev_score is not None else float("nan")
+            cv_scores.append(score_to_add)
+            fold_metrics.append(existing_progress[fold_idx])
+            continue
+
         logging.info(f"  Entrenando modelo para fold {fold_idx + 1}...")
+        t_fit = time.perf_counter()
         # Entrenar modelo
         model_fold = type(model)(**model.get_params())
 
@@ -187,14 +226,24 @@ def cross_validate_model(
             model_fold.fit(
                 X_train_fold, y_train_fold_encoded, sample_weight=sample_weight_fold
             )
+            # Guardar encoder para decodificar predicciones en evaluación
             model_fold.label_encoder_ = le_fold
-            model_fold.classes_ = le_fold.classes_  # Guardar clases para decodificación
+            # XGBoost expone classes_ como propiedad de solo lectura; guardamos clases
+            # originales en un atributo auxiliar compatible con evaluate_model
+            model_fold.original_classes_ = le_fold.classes_
         else:
             model_fold.fit(X_train_fold, y_train_fold)
+        logging.info(
+            f"  ✓ Fit fold {fold_idx + 1} completado en {time.perf_counter() - t_fit:.1f}s"
+        )
 
         logging.info("  Prediciendo en conjunto de validación...")
+        t_pred = time.perf_counter()
         # Predecir
         y_pred_fold = model_fold.predict(X_test_fold)
+        logging.info(
+            f"  ✓ Predicción fold {fold_idx + 1} en {time.perf_counter() - t_pred:.1f}s"
+        )
 
         # Decodificar predicciones de XGBoost si es necesario
         if (
@@ -252,6 +301,12 @@ def cross_validate_model(
             }
         fold_metrics.append(fold_metric)
 
+        # Persist progreso por fold para no perder resultados si se interrumpe
+        if progress_path is not None:
+            progress_path.parent.mkdir(parents=True, exist_ok=True)
+            with progress_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(fold_metric) + "\n")
+
     logging.info("\n" + "=" * 60)
     logging.info("RESUMEN DE CROSS-VALIDATION")
     logging.info("=" * 60)
@@ -259,6 +314,9 @@ def cross_validate_model(
         f"Score promedio ({scoring}): {np.mean(cv_scores):.4f} (+/- {np.std(cv_scores):.4f})"
     )
     logging.info(f"Scores por fold: {[f'{s:.4f}' for s in cv_scores]}")
+    logging.info(
+        f"Tiempo total de CV: {time.perf_counter() - t_cv_start:.1f}s ({n_splits} folds)"
+    )
     logging.info("=" * 60)
 
     return {
@@ -344,6 +402,7 @@ def run_training_pipeline(
     psd_method: str = "welch",
     stage_stratify: bool = True,
     skip_cross_if_single_eeg: bool = True,
+    resume_cv: bool = False,
     **model_kwargs,
 ) -> dict:
     """Ejecuta pipeline completo de entrenamiento y evaluación.
@@ -390,6 +449,11 @@ def run_training_pipeline(
         Diccionario con métricas de evaluación
     """
     logging.info("Iniciando pipeline de entrenamiento")
+    t_pipeline_start = time.perf_counter()
+
+    logging.info("\n" + "=" * 60)
+    logging.info("ETAPA 1: CARGA/PREPARACIÓN DE FEATURES")
+    logging.info("=" * 60)
 
     # Validar que TensorFlow esté disponible para modelos de deep learning
     if model_type in ["cnn1d", "lstm"] and not TF_AVAILABLE:
@@ -536,6 +600,12 @@ def run_training_pipeline(
                     "Use .parquet o .csv"
                 )
             logging.info(f"✓ Features cargadas: {len(features_df)} epochs")
+            logging.info(
+                f"Dims features_df: {features_df.shape[0]} rows x {features_df.shape[1]} cols"
+            )
+            logging.info(
+                f"Sujetos únicos: subject_id={features_df['subject_id'].nunique()}, subject_core={features_df['subject_core'].nunique()}"
+            )
         else:
             # Extraer features desde manifest
             features_df = prepare_features_dataset(
@@ -724,6 +794,9 @@ def run_training_pipeline(
     logging.info(f"✓ Features seleccionadas: {len(feature_cols)}")
     logging.info(f"✓ Epochs totales después de filtrar: {len(X)}")
     logging.info(f"✓ Distribución de estadios:\n{y.value_counts().sort_index()}")
+    logging.info(
+        f"Sujetos tras filtrar: subject_id={features_df['subject_id'].nunique()}, subject_core={features_df['subject_core'].nunique()}"
+    )
 
     # 3. Preparar datos para división (preservar metadata de sujetos)
     logging.info("\n" + "=" * 60)
@@ -747,7 +820,14 @@ def run_training_pipeline(
     cv_folds = model_kwargs.pop("cv_folds", 5)
     cv_strategy_normalized = (cv_strategy or "subject-kfold").lower()
 
+    # Crear output_dir temprano para guardar progreso de CV si se usa
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     if use_cv:
+        logging.info("\n" + "=" * 60)
+        logging.info("ETAPA 4: CROSS-VALIDATION")
+        logging.info("=" * 60)
         groups = combined_df["subject_core"]
         if cv_strategy_normalized not in {
             "subject-kfold",
@@ -798,13 +878,31 @@ def run_training_pipeline(
             )
             logging.info(f"Test size (por sujeto): {test_size}")
 
+        logging.info(
+            f"Iniciando cross-validation: strategy={cv_strategy_effective}, folds={effective_folds}, subjects={groups.nunique()}, samples={len(X)}"
+        )
+
         # Crear modelo base
+        # Sanitizar kwargs para no pasar flags de pipeline a los estimadores
+        estimator_kwargs = {
+            k: v
+            for k, v in model_kwargs.items()
+            if k
+            not in {
+                "cross_validate",
+                "cv_folds",
+                "save_metrics",
+                "optimize",
+                "n_iter_optimize",
+                "cv_folds_optimize",
+            }
+        }
         if model_type == "random_forest":
-            base_model = RandomForestClassifier(**model_kwargs)
+            base_model = RandomForestClassifier(**estimator_kwargs)
         elif model_type == "xgboost":
             if not XGB_AVAILABLE:
                 raise ImportError("XGBoost no está disponible.")
-            base_model = xgb.XGBClassifier(**model_kwargs)
+            base_model = xgb.XGBClassifier(**estimator_kwargs)
         else:
             raise ValueError(f"Tipo de modelo desconocido: {model_type}")
 
@@ -819,11 +917,14 @@ def run_training_pipeline(
             X_full=X_full_for_split,
             required_classes=STAGE_ORDER,
             strict_class_coverage=strict_class_coverage,
+            progress_path=output_dir / "cv_progress.jsonl",
+            resume_progress=resume_cv,
         )
+        logging.info("✓ Cross-validation completada")
 
         # Entrenar modelo final con todos los datos de train
         logging.info("\n" + "=" * 60)
-        logging.info("ETAPA 4: ENTRENAMIENTO DEL MODELO FINAL")
+        logging.info("ETAPA 5: ENTRENAMIENTO DEL MODELO FINAL")
         logging.info("=" * 60)
         logging.info("Dividiendo datos para entrenamiento final...")
         train_df, test_df, val_df = prepare_train_test_split(
@@ -836,15 +937,19 @@ def run_training_pipeline(
         )
         X_train = train_df[feature_cols]
         y_train = train_df["stage"]
+        logging.info(
+            f"Train size: {len(X_train)} | Test size: {len(test_df)} | Val size: {len(val_df) if val_df is not None else 0}"
+        )
+        logging.info(f"Features: {len(feature_cols)}")
 
         if model_type == "random_forest":
-            model = train_random_forest(X_train, y_train, **model_kwargs)
+            model = train_random_forest(X_train, y_train, **estimator_kwargs)
         elif model_type == "xgboost":
-            model = train_xgboost(X_train, y_train, **model_kwargs)
+            model = train_xgboost(X_train, y_train, **estimator_kwargs)
 
         # Evaluar en test
         logging.info("\n" + "=" * 60)
-        logging.info("ETAPA 5: EVALUACIÓN EN TEST")
+        logging.info("ETAPA 6: EVALUACIÓN EN TEST")
         logging.info("=" * 60)
         X_test = test_df[feature_cols]
         y_test = test_df["stage"]
@@ -855,6 +960,9 @@ def run_training_pipeline(
         print_evaluation_report(metrics, STAGE_ORDER)
     else:
         # Train/test simple (ya respeta grupos y tiempo en prepare_train_test_split)
+        logging.info("\n" + "=" * 60)
+        logging.info("ETAPA 3: TRAIN/TEST SPLIT SIMPLE")
+        logging.info("=" * 60)
         logging.info("Modo: Train/Test split simple")
         logging.info(f"Test size: {test_size}")
         if val_size:
@@ -967,6 +1075,9 @@ def run_training_pipeline(
     logging.info(f"Modelo guardado en: {model_path}")
     if save_metrics_flag:
         logging.info(f"Métricas guardadas en: {metrics_path}")
+    logging.info(
+        f"Tiempo total de pipeline: {time.perf_counter() - t_pipeline_start:.1f}s"
+    )
     logging.info("=" * 60 + "\n")
 
     return metrics
@@ -1181,6 +1292,11 @@ def build_parser() -> argparse.ArgumentParser:
         "subject-kfold, group-temporal (respeta orden temporal por sujeto).",
     )
     parser.add_argument(
+        "--resume-cv",
+        action="store_true",
+        help="Reanudar cross-validation leyendo folds ya completados en cv_progress.jsonl",
+    )
+    parser.add_argument(
         "--strict-class-coverage",
         action="store_true",
         help="Falla si algún split de CV carece de clases requeridas.",
@@ -1215,7 +1331,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     """Función principal para ejecutar desde CLI."""
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(message)s",
+        datefmt="%H:%M:%S",
+        force=True,
+    )
 
     parser = build_parser()
     args = parser.parse_args()
@@ -1269,6 +1390,7 @@ def main() -> int:
             temporal_split=args.temporal_split,
             cv_strategy=args.cv_strategy,
             strict_class_coverage=args.strict_class_coverage,
+            resume_cv=args.resume_cv,
             **model_kwargs,
         )
         return 0
