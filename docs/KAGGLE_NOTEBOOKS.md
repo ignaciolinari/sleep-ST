@@ -14,12 +14,12 @@ Antes de ejecutar los notebooks, debes subir los datos procesados a Kaggle como 
 
 ### Estructura del Dataset
 
-Crear un dataset en Kaggle llamado `sleep-edf-trimmed` con la siguiente estructura:
+Usa el dataset de Kaggle `sleep-edf-trimmed-200hz-f32-v2` (https://www.kaggle.com/datasets/ignaciolinari/sleep-edf-trimmed-200hz-f32-v2), que ya contiene los archivos remuestreados a 200 Hz en float32:
 
 ```
-sleep-edf-trimmed/
-├── manifest_trimmed.csv
-└── sleep_trimmed/
+sleep-edf-trimmed-200hz-f32-v2/
+├── manifest_trimmed_resamp200.csv
+└── sleep_trimmed_resamp200/
     ├── psg/
     │   ├── SC4001E_sleep-cassette_1.0.0_trimmed_raw.fif
     │   ├── SC4002E_sleep-cassette_1.0.0_trimmed_raw.fif
@@ -43,11 +43,11 @@ sleep-edf-trimmed/
 ### Pasos para Subir
 
 1. Ir a [kaggle.com/datasets](https://www.kaggle.com/datasets)
-2. Click en "New Dataset"
-3. Nombrar el dataset: `sleep-edf-trimmed`
-4. Subir el contenido de `data/processed/`:
-   - `manifest_trimmed.csv`
-   - Carpeta `sleep_trimmed/` completa
+2. Click en "New Dataset" (o "New Version" si ya existe)
+3. Nombrar el dataset: `sleep-edf-trimmed-200hz-f32-v2` (mantén el mismo slug para versionar)
+4. Subir el contenido de `data/processed/` correspondiente al remuestreo 200 Hz:
+   - `manifest_trimmed_resamp200.csv`
+   - Carpeta `sleep_trimmed_resamp200/` completa (`psg/` y `hypnograms/`)
 5. Publicar el dataset (puede ser privado)
 
 ## Notebooks Disponibles
