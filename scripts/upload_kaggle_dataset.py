@@ -10,9 +10,11 @@ Requisitos previos:
 Variables de entorno opcionales:
 - DATASET_DIR: ruta al folder del dataset (default ~/kaggle_upload_sleep_edf)
 - DATASET_SLUG: slug del dataset en Kaggle (default: nombre del folder con '-' en vez de '_')
-- DATASET_TITLE: título al crear (default "Sleep EDF trimmed 200Hz f32")
+- DATASET_TITLE: título al crear (default se deriva de DATASET_DATA_DIR)
 - DATASET_LICENSE: licencia Kaggle (default "CC-BY-4.0")
 - DATASET_MESSAGE: mensaje de versión (default "update")
+- DATASET_MANIFEST: nombre del manifest (default "manifest_trimmed_resamp200.csv")
+- DATASET_DATA_DIR: carpeta con psg/hypnograms (default "sleep_trimmed_resamp200")
 """
 
 import json
@@ -56,13 +58,13 @@ def ensure_kaggle_cli():
         sys.exit(f"ERROR: 'kaggle --version' falló: {e.stderr}")
 
 
-def ensure_dataset_dir(path: pathlib.Path):
+def ensure_dataset_dir(path: pathlib.Path, manifest_name: str, data_dir_name: str):
     if not path.exists():
         sys.exit(f"ERROR: No existe la carpeta del dataset: {path}")
     required = [
-        path / "manifest_trimmed_resamp200.csv",
-        path / "sleep_trimmed_resamp200" / "psg",
-        path / "sleep_trimmed_resamp200" / "hypnograms",
+        path / manifest_name,
+        path / data_dir_name / "psg",
+        path / data_dir_name / "hypnograms",
     ]
     missing = [p for p in required if not p.exists()]
     if missing:
@@ -96,13 +98,24 @@ def main():
     dataset_dir = pathlib.Path(
         os.environ.get("DATASET_DIR", "~/kaggle_upload_sleep_edf")
     ).expanduser()
+    manifest_name = os.environ.get("DATASET_MANIFEST", "manifest_trimmed_resamp200.csv")
+    data_dir_name = os.environ.get("DATASET_DATA_DIR", "sleep_trimmed_resamp200")
     dataset_slug = os.environ.get("DATASET_SLUG", dataset_dir.name.replace("_", "-"))
-    dataset_title = os.environ.get("DATASET_TITLE", "Sleep EDF trimmed 200Hz f32")
+    dataset_title = os.environ.get(
+        "DATASET_TITLE",
+        "Sleep EDF trimmed 200Hz f32"
+        if data_dir_name == "sleep_trimmed_resamp200"
+        else f"Sleep EDF {data_dir_name.replace('_', ' ')}",
+    )
     dataset_license = os.environ.get("DATASET_LICENSE", "CC-BY-4.0")
     version_message = os.environ.get("DATASET_MESSAGE", "update")
     dir_mode = os.environ.get("DATASET_DIR_MODE", "tar")  # zip | tar
 
-    ensure_dataset_dir(dataset_dir)
+    print(
+        f"[INFO] Validando contenido: {manifest_name}, "
+        f"{data_dir_name}/psg, {data_dir_name}/hypnograms"
+    )
+    ensure_dataset_dir(dataset_dir, manifest_name, data_dir_name)
     full_id = f"{username}/{dataset_slug}"
     ensure_metadata(dataset_dir, dataset_title, full_id, dataset_license)
 
