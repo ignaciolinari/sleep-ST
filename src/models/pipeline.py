@@ -9,8 +9,9 @@ import json
 import logging
 import pickle
 import time
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -30,8 +31,8 @@ try:
 except ImportError:
     XGB_AVAILABLE = False
 
-from ..crossval import SubjectTimeSeriesSplit, GroupTimeSeriesSplit
-
+from ..crossval import GroupTimeSeriesSplit, SubjectTimeSeriesSplit
+from ..features import DEFAULT_FILTER_BAND, DEFAULT_NOTCH_FREQS
 from .base import (
     STAGE_ORDER,
     TF_AVAILABLE,
@@ -46,10 +47,9 @@ from .data_preparation import (
     prepare_sequence_dataset,
     prepare_train_test_split,
 )
-from ..features import DEFAULT_FILTER_BAND, DEFAULT_NOTCH_FREQS
+from .optimization import optimize_hyperparameters
 from .random_forest import train_random_forest
 from .xgboost_model import train_xgboost
-from .optimization import optimize_hyperparameters
 
 if TF_AVAILABLE:
     from .cnn1d import train_cnn1d

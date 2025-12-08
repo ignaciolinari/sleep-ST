@@ -18,8 +18,8 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
 
 import matplotlib.pyplot as plt
 import mne
@@ -55,10 +55,10 @@ VALUE_TO_STAGE = {
 class SessionInfo:
     subject_id: str
     psg_path: str
-    hypnogram_path: Optional[str]
+    hypnogram_path: str | None
 
 
-def _parse_channels(value: Optional[str]) -> Optional[List[str]]:
+def _parse_channels(value: str | None) -> list[str] | None:
     if value is None:
         return None
     value = value.strip()
@@ -94,8 +94,8 @@ def _load_manifest(manifest_path: str) -> pd.DataFrame:
 def _resolve_session(
     subject_id: str,
     manifest_path: str,
-    subset: Optional[str],
-    version: Optional[str],
+    subset: str | None,
+    version: str | None,
     require_ok_status: bool = True,
 ) -> SessionInfo:
     df = _load_manifest(manifest_path)
@@ -150,8 +150,8 @@ def _print_channels(psg_path: str) -> None:
 
 def _load_raw(
     psg_path: str,
-    channels: Optional[Sequence[str]],
-    resample: Optional[float],
+    channels: Sequence[str] | None,
+    resample: float | None,
     verbose: bool,
 ) -> mne.io.BaseRaw:
     raw = mne.io.read_raw_edf(psg_path, preload=True, verbose=verbose)
@@ -188,8 +188,8 @@ def _load_raw(
 def _extract_data(
     raw: mne.io.BaseRaw,
     start: float,
-    duration: Optional[float],
-) -> Tuple[mne.io.BaseRaw, List[float], List[List[float]]]:
+    duration: float | None,
+) -> tuple[mne.io.BaseRaw, list[float], list[list[float]]]:
     start = max(0.0, float(start))
     sfreq = float(raw.info["sfreq"])
 
@@ -219,9 +219,9 @@ def _plot_signals(
     data: Sequence[Sequence[float]],
     subject_id: str,
     start: float,
-    duration: Optional[float],
-    stage_series: Optional[Tuple[Sequence[float], Sequence[int]]],
-    save_path: Optional[str],
+    duration: float | None,
+    stage_series: tuple[Sequence[float], Sequence[int]] | None,
+    save_path: str | None,
     dpi: int,
 ) -> None:
     channel_names = raw.ch_names
@@ -266,17 +266,17 @@ def _plot_signals(
 
 
 def _maybe_build_stage_series(
-    hypnogram_path: Optional[str],
+    hypnogram_path: str | None,
     start: float,
-    duration: Optional[float],
+    duration: float | None,
     verbose: bool,
-) -> Optional[Tuple[List[float], List[int]]]:
+) -> tuple[list[float], list[int]] | None:
     if not hypnogram_path or not os.path.exists(hypnogram_path):
         return None
 
     annotations = mne.read_annotations(hypnogram_path)
-    stage_times: List[float] = []
-    stage_values: List[int] = []
+    stage_times: list[float] = []
+    stage_values: list[int] = []
     end = start + duration if duration is not None else None
 
     for onset, dur, desc in zip(
@@ -389,7 +389,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 

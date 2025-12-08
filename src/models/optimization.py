@@ -22,15 +22,16 @@ except ImportError:
     XGB_AVAILABLE = False
 
 from ..crossval import SubjectTimeSeriesSplit
-from .base import TF_AVAILABLE, OPTUNA_AVAILABLE, _configure_tensorflow_cpu_only
+from .base import OPTUNA_AVAILABLE, TF_AVAILABLE, _configure_tensorflow_cpu_only
 
 if OPTUNA_AVAILABLE:
     import optuna
-    from optuna.samplers import TPESampler
     from optuna.pruners import MedianPruner
+    from optuna.samplers import TPESampler
 
 if TF_AVAILABLE:
     from tensorflow import keras
+
     from .cnn1d import build_cnn1d_model
     from .lstm import build_lstm_model
 

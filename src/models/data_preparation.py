@@ -10,8 +10,8 @@ Este módulo contiene funciones para:
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -29,9 +29,7 @@ from src.features import (
 from src.models.base import STAGE_ORDER, TF_AVAILABLE
 
 
-def _core_stage_labels(
-    features_df: pd.DataFrame, stratify_by: str
-) -> Optional[pd.Series]:
+def _core_stage_labels(features_df: pd.DataFrame, stratify_by: str) -> pd.Series | None:
     """Calcula la etiqueta de estadio dominante por subject_core."""
     if "stage" not in features_df.columns or stratify_by not in features_df.columns:
         return None
@@ -49,9 +47,9 @@ def _core_stage_labels(
 
 def prepare_features_dataset(
     manifest_path: Path | str,
-    limit: Optional[int] = None,
+    limit: int | None = None,
     epoch_length: float = 30.0,
-    sfreq: Optional[float] = None,
+    sfreq: float | None = None,
     movement_policy: str = "drop",
     overlap: float = 0.0,
     apply_prefilter: bool = True,
@@ -190,10 +188,10 @@ def prepare_features_dataset(
 
 def prepare_raw_epochs_dataset(
     manifest_path: Path | str,
-    limit: Optional[int] = None,
+    limit: int | None = None,
     epoch_length: float = 30.0,
-    sfreq: Optional[float] = None,
-    channels: Optional[list[str]] = None,
+    sfreq: float | None = None,
+    channels: list[str] | None = None,
     movement_policy: str = "drop",
     overlap: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray, pd.DataFrame]:
@@ -477,10 +475,10 @@ def _find_missing_classes(
 def _temporal_split_by_session(
     features_df: pd.DataFrame,
     test_size: float,
-    val_size: Optional[float],
+    val_size: float | None,
     stratify_by: str,
     session_col: str,
-) -> tuple[pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame]]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame | None]:
     if (
         session_col not in features_df.columns
         and "epoch_time_start" not in features_df.columns
@@ -546,17 +544,17 @@ def _temporal_split_by_session(
 def prepare_train_test_split(
     features_df: pd.DataFrame,
     test_size: float = 0.2,
-    val_size: Optional[float] = None,
+    val_size: float | None = None,
     random_state: int = 42,
-    stratify_by: Optional[str] = "subject_core",
+    stratify_by: str | None = "subject_core",
     *,
     ensure_class_coverage: bool = True,
-    required_classes: Optional[Sequence[str]] = None,
+    required_classes: Sequence[str] | None = None,
     max_attempts: int = 100,
     temporal_split: bool = False,
     session_col: str = "session_idx",
     stage_stratify: bool = True,
-) -> tuple[pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame]]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame | None]:
     """Divide dataset en train/test/val respetando sujetos.
 
     IMPORTANTE: Divide por subject_core (no subject_id) para evitar data leakage.

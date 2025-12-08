@@ -41,15 +41,15 @@ Para optimización de hiperparámetros:
 
 # Constantes y utilidades base
 from .base import (
+    OPTUNA_AVAILABLE,
     STAGE_ORDER,
     TF_AVAILABLE,
-    OPTUNA_AVAILABLE,
     evaluate_model,
+    load_metrics,
+    load_model,
     print_evaluation_report,
     save_metrics,
-    load_metrics,
     save_model,
-    load_model,
 )
 
 # Preparación de datos
@@ -60,10 +60,6 @@ from .data_preparation import (
     prepare_train_test_split,
 )
 
-# Modelos de Machine Learning
-from .random_forest import train_random_forest
-from .xgboost_model import train_xgboost
-
 # Optimización de hiperparámetros
 from .optimization import (
     optimize_hyperparameters,
@@ -72,19 +68,26 @@ from .optimization import (
 
 # Pipeline principal
 from .pipeline import (
-    run_training_pipeline,
-    cross_validate_model,
     build_parser,
+    cross_validate_model,
     main,
+    run_training_pipeline,
 )
+
+# Modelos de Machine Learning
+from .random_forest import train_random_forest
+from .xgboost_model import train_xgboost
 
 # Modelos de Deep Learning (condicionales a TensorFlow)
 if TF_AVAILABLE:
     from .cnn1d import (
         build_cnn1d_model as build_cnn1d_model,
+    )
+    from .cnn1d import (
         train_cnn1d as train_cnn1d,
     )
-    from .lstm import build_lstm_model as build_lstm_model, train_lstm as train_lstm
+    from .lstm import build_lstm_model as build_lstm_model
+    from .lstm import train_lstm as train_lstm
     from .optimization import optimize_hyperparameters_dl as optimize_hyperparameters_dl
 
 __all__ = [

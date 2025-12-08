@@ -36,12 +36,12 @@ def _import_dl_models():
 
     try:
         from src.models import (
+            STAGE_ORDER,
+            evaluate_model,
+            load_model,
+            save_model,
             train_cnn1d,
             train_lstm,
-            save_model,
-            load_model,
-            evaluate_model,
-            STAGE_ORDER,
         )
 
         return (

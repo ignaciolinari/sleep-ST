@@ -1,0 +1,21 @@
+# Ruff configuration for sleep-ST project
+# https://docs.astral.sh/ruff/configuration/
+
+[lint]
+# Default rules + some extras
+select = ["E", "F", "W", "I", "C4", "UP"]
+ignore = [
+    "E501",  # Line too long (handled by formatter)
+    "F821",  # Undefined name - false positives in notebooks due to cell-by-cell analysis
+]
+
+# Per-file ignores
+[lint.per-file-ignores]
+# Test files can have broader ignores
+"tests/*.py" = ["B011"]
+
+[format]
+# Use double quotes for strings
+quote-style = "double"
+# Indent with spaces
+indent-style = "space"

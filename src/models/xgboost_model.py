@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -25,7 +24,7 @@ def train_xgboost(
     reg_lambda: float = 1.0,
     random_state: int = 42,
     n_jobs: int = -1,
-    scale_pos_weight: Optional[float] = None,
+    scale_pos_weight: float | None = None,
 ) -> xgb.XGBClassifier:
     """Entrena un modelo XGBoost.
 

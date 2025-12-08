@@ -14,7 +14,6 @@ import argparse
 import csv
 import os
 from dataclasses import dataclass
-from typing import Dict, List, Optional
 
 
 @dataclass
@@ -22,8 +21,8 @@ class Session:
     subject_id: str
     subset: str
     version: str
-    psg_path: Optional[str] = None
-    hypnogram_path: Optional[str] = None
+    psg_path: str | None = None
+    hypnogram_path: str | None = None
 
     @property
     def status(self) -> str:
@@ -50,11 +49,11 @@ def _canonical_key(basename: str) -> str:
     return basename.split("-")[0]
 
 
-def scan_sessions(raw_root: str, version: str, subset: str) -> List[Session]:
+def scan_sessions(raw_root: str, version: str, subset: str) -> list[Session]:
     base = os.path.join(
         raw_root, "physionet.org", "files", "sleep-edfx", version, subset
     )
-    sessions: Dict[str, Session] = {}
+    sessions: dict[str, Session] = {}
     if not os.path.isdir(base):
         return []
 
@@ -74,7 +73,7 @@ def scan_sessions(raw_root: str, version: str, subset: str) -> List[Session]:
     return list(sessions.values())
 
 
-def write_manifest(sessions: List[Session], out_csv: str) -> None:
+def write_manifest(sessions: list[Session], out_csv: str) -> None:
     os.makedirs(os.path.dirname(out_csv), exist_ok=True)
     with open(out_csv, "w", newline="") as f:
         writer = csv.writer(f)

@@ -29,7 +29,6 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
 
 
 def clean_previous_data(raw_root: str, processed_root: str, version: str) -> None:
@@ -74,8 +73,8 @@ def _load_check_data_module():
 def build_wget_command(
     base_url: str,
     out_dir: str,
-    username: Optional[str] = None,
-    password: Optional[str] = None,
+    username: str | None = None,
+    password: str | None = None,
 ) -> list[str]:
     """Construye el comando wget para descarga recursiva.
 
@@ -112,8 +111,8 @@ def run_wget(
     subset: str,
     version: str,
     out_dir: str,
-    username: Optional[str],
-    password: Optional[str],
+    username: str | None,
+    password: str | None,
     dry_run: bool,
 ) -> int:
     if subset not in {"sleep-cassette", "sleep-telemetry", "all"}:
@@ -180,7 +179,7 @@ def run_wfdb(out_dir: str, dry_run: bool) -> int:
         return 1
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Descargar Sleep-EDFx desde PhysioNet")
     parser.add_argument(
         "--method",

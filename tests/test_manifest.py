@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 from src.manifest import Session, _canonical_key, scan_sessions, write_manifest
 
 
@@ -236,7 +235,7 @@ class TestWriteManifest:
         # Verificar contenido
         import csv
 
-        with open(out_path, "r") as f:
+        with open(out_path) as f:
             reader = csv.DictReader(f)
             rows = list(reader)
 
@@ -269,7 +268,7 @@ class TestWriteManifest:
 
         import csv
 
-        with open(out_path, "r") as f:
+        with open(out_path) as f:
             reader = csv.DictReader(f)
             rows = list(reader)
 

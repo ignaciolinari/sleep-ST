@@ -9,18 +9,17 @@ Este módulo verifica que:
 
 from __future__ import annotations
 
-
 import numpy as np
 import pandas as pd
 import pytest
 
 from src.models import (
+    STAGE_ORDER,
+    evaluate_model,
+    load_model,
+    save_model,
     train_random_forest,
     train_xgboost,
-    evaluate_model,
-    save_model,
-    load_model,
-    STAGE_ORDER,
 )
 
 

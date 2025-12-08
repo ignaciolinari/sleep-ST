@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-
 import mne
 import numpy as np
 import pandas as pd
 import pytest
 
 from src.features import (
+    FREQ_BANDS,
     assign_stages_to_epochs,
     create_epochs,
     extract_cross_channel_features,
@@ -18,7 +18,6 @@ from src.features import (
     extract_temporal_features,
     load_hypnogram,
     load_psg_data,
-    FREQ_BANDS,
 )
 
 

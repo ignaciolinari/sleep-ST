@@ -14,7 +14,6 @@ import logging
 import pickle
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -82,7 +81,7 @@ def evaluate_model(
     model,
     X_test: pd.DataFrame | np.ndarray,
     y_test: pd.Series | np.ndarray,
-    stage_order: Optional[list[str]] = None,
+    stage_order: list[str] | None = None,
     dataset_name: str = "TEST",
 ) -> dict:
     """Evalúa un modelo y retorna métricas.

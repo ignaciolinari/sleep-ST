@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from src.preprocessing import (
+    SLEEP_STAGES,
     TrimResult,
     _build_timeline,
     _canonical_stage,
@@ -24,7 +25,6 @@ from src.preprocessing import (
     _process_session,
     _total_recording_duration,
     _write_manifest,
-    SLEEP_STAGES,
 )
 
 

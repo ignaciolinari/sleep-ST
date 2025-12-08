@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
@@ -13,11 +12,11 @@ def train_random_forest(
     X_train: pd.DataFrame,
     y_train: pd.Series,
     n_estimators: int = 200,
-    max_depth: Optional[int] = None,
+    max_depth: int | None = None,
     min_samples_split: int = 5,
     min_samples_leaf: int = 2,
-    max_features: Optional[str | int | float] = "sqrt",
-    class_weight: Optional[str] = "balanced",
+    max_features: str | int | float | None = "sqrt",
+    class_weight: str | None = "balanced",
     random_state: int = 42,
     n_jobs: int = -1,
 ) -> RandomForestClassifier:

@@ -12,7 +12,8 @@ dividir temporalmente dentro de una misma noche, se puede usar GroupTimeSeriesSp
 
 from __future__ import annotations
 
-from typing import Iterator, Optional
+from collections.abc import Iterator
+
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import BaseCrossValidator, TimeSeriesSplit
@@ -47,8 +48,8 @@ class GroupTimeSeriesSplit(BaseCrossValidator):
     def __init__(
         self,
         n_splits: int = 5,
-        test_size: Optional[float] = None,
-        max_train_size: Optional[int] = None,
+        test_size: float | None = None,
+        max_train_size: int | None = None,
         gap: int = 0,
     ):
         self.n_splits = n_splits
@@ -59,8 +60,8 @@ class GroupTimeSeriesSplit(BaseCrossValidator):
     def split(
         self,
         X: pd.DataFrame,
-        y: Optional[pd.Series] = None,
-        groups: Optional[pd.Series] = None,
+        y: pd.Series | None = None,
+        groups: pd.Series | None = None,
     ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
         """Genera índices para train/test en cada fold usando TimeSeriesSplit por grupo.
 
@@ -195,9 +196,9 @@ class GroupTimeSeriesSplit(BaseCrossValidator):
 
     def get_n_splits(
         self,
-        X: Optional[pd.DataFrame] = None,
-        y: Optional[pd.Series] = None,
-        groups: Optional[pd.Series] = None,
+        X: pd.DataFrame | None = None,
+        y: pd.Series | None = None,
+        groups: pd.Series | None = None,
     ) -> int:
         """Retorna el número de folds."""
         if X is None or groups is None or self.test_size is None:
@@ -262,7 +263,7 @@ class SubjectTimeSeriesSplit(BaseCrossValidator):
         self,
         n_splits: int = 5,
         test_size: float = 0.2,
-        max_train_size: Optional[int] = None,
+        max_train_size: int | None = None,
     ):
         self.n_splits = n_splits
         self.test_size = test_size
@@ -271,8 +272,8 @@ class SubjectTimeSeriesSplit(BaseCrossValidator):
     def split(
         self,
         X: pd.DataFrame,
-        y: Optional[pd.Series] = None,
-        groups: Optional[pd.Series] = None,
+        y: pd.Series | None = None,
+        groups: pd.Series | None = None,
     ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
         """Genera índices para train/test en cada fold.
 
@@ -336,9 +337,9 @@ class SubjectTimeSeriesSplit(BaseCrossValidator):
 
     def get_n_splits(
         self,
-        X: Optional[pd.DataFrame] = None,
-        y: Optional[pd.Series] = None,
-        groups: Optional[pd.Series] = None,
+        X: pd.DataFrame | None = None,
+        y: pd.Series | None = None,
+        groups: pd.Series | None = None,
     ) -> int:
         """Retorna el número de folds."""
         return self.n_splits

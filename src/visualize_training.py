@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from typing import TypedDict
+
 import matplotlib.pyplot as plt
 import numpy as np
-from pathlib import Path
-from typing import Optional, TypedDict
 
 from src.models import load_model
 
@@ -22,8 +23,8 @@ class OverfittingResults(TypedDict):
 
 def plot_training_history(
     history: dict | Path | str,
-    model_name: Optional[str] = None,
-    save_path: Optional[Path | str] = None,
+    model_name: str | None = None,
+    save_path: Path | str | None = None,
     figsize: tuple[int, int] = (12, 4),
 ) -> None:
     """Visualiza el historial de entrenamiento de un modelo de deep learning.
@@ -46,7 +47,7 @@ def plot_training_history(
             raise FileNotFoundError(
                 f"Archivo de historial no encontrado: {history_path}"
             )
-        with open(history_path, "r") as f:
+        with open(history_path) as f:
             history = json.load(f)
 
     if not isinstance(history, dict):
@@ -110,7 +111,7 @@ def plot_training_history(
 
 def plot_training_history_from_model(
     model_path: Path | str,
-    save_path: Optional[Path | str] = None,
+    save_path: Path | str | None = None,
     figsize: tuple[int, int] = (12, 4),
 ) -> None:
     """Carga un modelo y visualiza su historial de entrenamiento.
@@ -175,7 +176,7 @@ def check_overfitting(
             raise FileNotFoundError(
                 f"Archivo de historial no encontrado: {history_path}"
             )
-        with open(history_path, "r") as f:
+        with open(history_path) as f:
             history = json.load(f)
 
     if not isinstance(history, dict):

@@ -14,12 +14,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
 
 import pandas as pd
-
 
 BUFFER_SIZE = 1024 * 1024  # 1 MiB chunks for hashing
 
@@ -32,9 +31,9 @@ class QAResult:
     change the exit code unless ``--strict`` is requested by the caller.
     """
 
-    errors: List[str] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
-    infos: List[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    infos: list[str] = field(default_factory=list)
 
     def add_error(self, message: str) -> None:
         self.errors.append(message)
@@ -59,7 +58,7 @@ class HashSummary:
     mismatch: int = 0
     missing: int = 0
 
-    def as_dict(self) -> Dict[str, int]:
+    def as_dict(self) -> dict[str, int]:
         return {
             "match": self.match,
             "mismatch": self.mismatch,
@@ -75,7 +74,7 @@ def _compute_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def ensure_subject_metadata(base_dir: Path, result: QAResult) -> Optional[Path]:
+def ensure_subject_metadata(base_dir: Path, result: QAResult) -> Path | None:
     """Ensure the CSV version of the subject metadata exists.
 
     Returns the path to the CSV file if it exists or could be generated.
@@ -107,7 +106,7 @@ def ensure_subject_metadata(base_dir: Path, result: QAResult) -> Optional[Path]:
 
 def compute_hash_report(
     version_root: Path, report_path: Path, result: QAResult
-) -> Dict[str, List[str]]:
+) -> dict[str, list[str]]:
     """Compute hash report for the dataset version root.
 
     Parameters
@@ -130,10 +129,10 @@ def compute_hash_report(
     if not sha_file.exists():
         raise FileNotFoundError(f"SHA256SUMS.txt not found under {version_root}")
 
-    rows: List[Dict[str, object]] = []
+    rows: list[dict[str, object]] = []
     summary = HashSummary()
-    mismatches: List[str] = []
-    missing: List[str] = []
+    mismatches: list[str] = []
+    missing: list[str] = []
 
     with sha_file.open() as fh:
         for raw_line in fh:
@@ -147,8 +146,8 @@ def compute_hash_report(
                 continue
             rel_path = rel_path.strip()
             file_path = version_root / rel_path
-            actual_hash: Optional[str] = None
-            size_bytes: Optional[int] = None
+            actual_hash: str | None = None
+            size_bytes: int | None = None
             status: str
             if not file_path.exists():
                 status = "missing"
@@ -186,10 +185,10 @@ def compute_hash_report(
     return {"mismatches": mismatches, "missing": missing}
 
 
-def check_manifest(paths: Iterable[str], label: str) -> List[str]:
+def check_manifest(paths: Iterable[str], label: str) -> list[str]:
     """Return the subset of paths that do not exist on disk."""
 
-    missing: List[str] = []
+    missing: list[str] = []
     for raw_path in paths:
         if not isinstance(raw_path, str) or not raw_path:
             missing.append(str(raw_path))
@@ -202,8 +201,8 @@ def check_manifest(paths: Iterable[str], label: str) -> List[str]:
 def verify_processed_artifacts(
     processed_root: Path,
     result: QAResult,
-    manifest_path: Optional[Path] = None,
-    manifest_trimmed_path: Optional[Path] = None,
+    manifest_path: Path | None = None,
+    manifest_trimmed_path: Path | None = None,
 ) -> None:
     """Validate manifest CSV files and referenced artifacts."""
 
@@ -259,7 +258,7 @@ def run_checks(
     processed_root: Path,
     version: str,
     report_path: Path,
-    result: Optional[QAResult] = None,
+    result: QAResult | None = None,
     strict: bool = False,
 ) -> QAResult:
     """Execute the QA routine and return the aggregated result."""
@@ -295,7 +294,7 @@ def run_checks(
     return result
 
 
-def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validate Sleep-EDFx assets")
     parser.add_argument(
         "--raw-root",
@@ -328,7 +327,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     result = run_checks(
         raw_root=args.raw_root,

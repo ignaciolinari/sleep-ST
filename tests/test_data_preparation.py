@@ -7,6 +7,7 @@ import pytest
 pytest.importorskip("yasa")
 
 import pandas as pd  # noqa: E402
+
 from src.models.data_preparation import prepare_train_test_split  # noqa: E402
 
 

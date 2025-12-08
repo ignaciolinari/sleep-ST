@@ -9,14 +9,13 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 import mne
 import numpy as np
 import pandas as pd
+import yasa
 from scipy import signal
 from scipy.stats import entropy as scipy_entropy
-import yasa
 
 # Canales por defecto del dataset Sleep-EDF
 DEFAULT_CHANNELS = {
@@ -52,8 +51,8 @@ STAGE_CANONICAL = {
 
 def load_psg_data(
     psg_path: Path | str,
-    channels: Optional[list[str]] = None,
-    sfreq: Optional[float] = None,
+    channels: list[str] | None = None,
+    sfreq: float | None = None,
 ) -> tuple[np.ndarray, float, list[str]]:
     """Carga datos PSG desde archivo .fif.
 
@@ -134,7 +133,7 @@ def load_hypnogram(
 
     df = df.copy()
 
-    def _map_stage(desc: str | float) -> Optional[str]:
+    def _map_stage(desc: str | float) -> str | None:
         if isinstance(desc, float) and pd.isna(desc):
             return None
         if desc in {"Movement time", "Sleep stage ?"}:
@@ -961,8 +960,8 @@ def extract_features_from_session(
     psg_path: Path | str,
     hypnogram_path: Path | str,
     epoch_length: float = 30.0,
-    sfreq: Optional[float] = None,
-    channels: Optional[list[str]] = None,
+    sfreq: float | None = None,
+    channels: list[str] | None = None,
     movement_policy: str = "drop",
     overlap: float = 0.0,
     apply_prefilter: bool = True,

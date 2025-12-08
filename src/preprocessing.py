@@ -30,13 +30,12 @@ from __future__ import annotations
 import argparse
 import csv
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
 
 import mne
 import pandas as pd
-
 
 # Mapeo de etiquetas crudas a estadios canónicos
 STAGE_CANONICAL = {
@@ -103,28 +102,28 @@ class TrimResult:
     subset: str
     version: str
     status: str
-    psg_trimmed_path: Optional[Path]
-    hyp_trimmed_path: Optional[Path]
-    trim_start_sec: Optional[float]
-    trim_end_sec: Optional[float]
-    trim_duration_sec: Optional[float]
+    psg_trimmed_path: Path | None
+    hyp_trimmed_path: Path | None
+    trim_start_sec: float | None
+    trim_end_sec: float | None
+    trim_duration_sec: float | None
     padding_pre_sec: float
     padding_post_sec: float
-    sleep_duration_sec: Optional[float] = None
-    episode_index: Optional[int] = None
-    episodes_total: Optional[int] = None
-    episode_strategy: Optional[str] = None
-    notes: Optional[str] = None
+    sleep_duration_sec: float | None = None
+    episode_index: int | None = None
+    episodes_total: int | None = None
+    episode_strategy: str | None = None
+    notes: str | None = None
 
 
-def _canonical_stage(description: str) -> Optional[str]:
+def _canonical_stage(description: str) -> str | None:
     return STAGE_CANONICAL.get(description)
 
 
 def _build_timeline(
     annotations: mne.Annotations,
-) -> list[tuple[float, float, Optional[str]]]:
-    timeline: list[tuple[float, float, Optional[str]]] = []
+) -> list[tuple[float, float, str | None]]:
+    timeline: list[tuple[float, float, str | None]] = []
     for onset, duration, desc in zip(
         annotations.onset, annotations.duration, annotations.description
     ):
@@ -134,7 +133,7 @@ def _build_timeline(
 
 
 def _total_recording_duration(
-    timeline: list[tuple[float, float, Optional[str]]],
+    timeline: list[tuple[float, float, str | None]],
 ) -> float:
     if not timeline:
         return 0.0
@@ -143,7 +142,7 @@ def _total_recording_duration(
 
 
 def _find_sleep_indices(
-    timeline: list[tuple[float, float, Optional[str]]],
+    timeline: list[tuple[float, float, str | None]],
 ) -> list[int]:
     return [
         idx
@@ -153,8 +152,8 @@ def _find_sleep_indices(
 
 
 def _compute_spt_bounds(
-    timeline: list[tuple[float, float, Optional[str]]],
-) -> Optional[tuple[float, float]]:
+    timeline: list[tuple[float, float, str | None]],
+) -> tuple[float, float] | None:
     sleep_indices = _find_sleep_indices(timeline)
     if not sleep_indices:
         return None
@@ -167,7 +166,7 @@ def _compute_spt_bounds(
 
 
 def _compute_trim_bounds_from_spt(
-    timeline: list[tuple[float, float, Optional[str]]],
+    timeline: list[tuple[float, float, str | None]],
     spt_bounds: tuple[float, float],
     padding_pre: float,
     padding_post: float,
@@ -183,7 +182,7 @@ def _compute_trim_bounds_from_spt(
 
 
 def _generate_sleep_segments(
-    timeline: list[tuple[float, float, Optional[str]]],
+    timeline: list[tuple[float, float, str | None]],
 ) -> list[tuple[float, float, float]]:
     """Return sleep segments as (start, end, duration)."""
 
@@ -245,7 +244,7 @@ def _choose_segments_by_strategy(
 
 def _expand_segments_with_padding(
     segments: list[tuple[float, float, float]],
-    timeline: list[tuple[float, float, Optional[str]]],
+    timeline: list[tuple[float, float, str | None]],
     padding_pre: float,
     padding_post: float,
 ) -> list[dict[str, float]]:
@@ -395,10 +394,10 @@ def _process_session(
     min_episode_sleep_min: float,
     episode_strategy: str,
     overwrite: bool,
-    resample_sfreq: Optional[float] = None,
-    l_freq: Optional[float] = None,
-    h_freq: Optional[float] = None,
-    notch_freqs: Optional[list[float]] = None,
+    resample_sfreq: float | None = None,
+    l_freq: float | None = None,
+    h_freq: float | None = None,
+    notch_freqs: list[float] | None = None,
     avg_ref: bool = False,
 ) -> list[TrimResult]:
     subject_id = row["subject_id"]
