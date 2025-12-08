@@ -36,9 +36,11 @@ sleep-edf-trimmed-200hz-f32-v2/
 
 | Carpeta | Contenido | Descripcion |
 |---------|-----------|-------------|
-| `manifest_trimmed.csv` | Archivo raiz | Mapeo de sujetos a archivos PSG y hypnogramas |
-| `sleep_trimmed/psg/` | Archivos `.fif` | Datos de polisomnografia (senales EEG, EOG, EMG) |
-| `sleep_trimmed/hypnograms/` | Archivos `.csv` | Anotaciones de etapas del sueno por epoca |
+| `manifest_trimmed_resamp200.csv` | Archivo raiz | Mapeo de sujetos a archivos PSG y hypnogramas |
+| `sleep_trimmed_resamp200/psg/` | Archivos `.fif` | Datos de polisomnografia (senales EEG, EOG, EMG) |
+| `sleep_trimmed_resamp200/hypnograms/` | Archivos `.csv` | Anotaciones de etapas del sueno por epoca |
+
+> Si usas la version 100 Hz (sin remuestreo), el manifest y carpetas se llaman `manifest_trimmed_spt.csv` y `sleep_trimmed_spt/`.
 
 ### Pasos para Subir
 
@@ -157,7 +159,7 @@ El problema es clasificacion multiclase con 5 etapas del sueno:
 
 3. **Output**: Guarda los modelos finales en `/kaggle/working/` para descargarlos.
 
-4. **Memoria**: Con 2x T4 tienes 32GB de VRAM total. Ajusta `batch_size` si hay OOM errors.
+4. **Memoria**: Con 2x T4 tienes 32GB de VRAM total. Si usas el dataset 200 Hz, déjalo en `sfreq=100` (los notebooks ya re-muestrean) o baja `batch_size`; la versión 100 Hz (`manifest_trimmed_spt.csv`) suele evitar OOM.
 
 5. **Persistencia**: Usa `kaggle datasets` para guardar modelos entrenados como datasets.
 
