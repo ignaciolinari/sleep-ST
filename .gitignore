@@ -68,6 +68,7 @@ build/
 
 # Modelos entrenados
 models/**/*.pkl
+checkpoints/
 
 # # Configuración personal
 # *.json

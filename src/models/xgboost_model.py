@@ -19,6 +19,8 @@ def train_xgboost(
     learning_rate: float = 0.1,
     subsample: float = 0.8,
     colsample_bytree: float = 0.8,
+    min_child_weight: int = 1,
+    gamma: float = 0.0,
     reg_alpha: float = 0.01,
     reg_lambda: float = 1.0,
     random_state: int = 42,
@@ -68,6 +70,8 @@ def train_xgboost(
     logging.info(f"  - Tasa de aprendizaje: {learning_rate}")
     logging.info(f"  - Subsample: {subsample}")
     logging.info(f"  - Colsample bytree: {colsample_bytree}")
+    logging.info(f"  - Min child weight: {min_child_weight}")
+    logging.info(f"  - Gamma: {gamma}")
     logging.info(f"  - Regularización L1 (alpha): {reg_alpha}")
     logging.info(f"  - Regularización L2 (lambda): {reg_lambda}")
     logging.info(f"  - Jobs paralelos: {n_jobs}")
@@ -113,6 +117,8 @@ def train_xgboost(
         learning_rate=learning_rate,
         subsample=subsample,
         colsample_bytree=colsample_bytree,
+        min_child_weight=min_child_weight,
+        gamma=gamma,
         reg_alpha=reg_alpha,
         reg_lambda=reg_lambda,
         random_state=random_state,

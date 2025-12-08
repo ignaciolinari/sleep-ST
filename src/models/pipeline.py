@@ -896,6 +896,10 @@ def run_training_pipeline(
                 "n_iter_optimize",
                 "cv_folds_optimize",
                 "optimize_storage",
+                "min_samples_split",
+                "min_samples_leaf",
+                "max_features",
+                "class_weight",
             }
         }
         if model_type == "random_forest":
@@ -1020,6 +1024,19 @@ def run_training_pipeline(
         logging.info("\n" + "=" * 60)
         logging.info("ETAPA 4: ENTRENAMIENTO DEL MODELO")
         logging.info("=" * 60)
+        # Remover flags internos que no pertenecen al estimador
+        for _k in [
+            "save_metrics",
+            "optimize_storage",
+            "n_iter_optimize",
+            "cv_folds_optimize",
+            "optimize",
+            "min_samples_split",
+            "min_samples_leaf",
+            "max_features",
+            "class_weight",
+        ]:
+            model_kwargs.pop(_k, None)
         if model_type == "random_forest":
             model = train_random_forest(X_train, y_train, **model_kwargs)
         elif model_type == "xgboost":
@@ -1279,6 +1296,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Profundidad máxima de los árboles",
     )
     parser.add_argument(
+        "--min-samples-split",
+        type=int,
+        default=2,
+        help="Mínimo de muestras para split (Random Forest)",
+    )
+    parser.add_argument(
+        "--min-samples-leaf",
+        type=int,
+        default=1,
+        help="Mínimo de muestras en hoja (Random Forest)",
+    )
+    parser.add_argument(
+        "--max-features",
+        type=str,
+        default="sqrt",
+        choices=["sqrt", "log2", "auto", "none"],
+        help="Número de features consideradas en cada split (Random Forest)",
+    )
+    parser.add_argument(
+        "--class-weight",
+        type=str,
+        default=None,
+        choices=[None, "balanced", "balanced_subsample"],
+        help="Pesos de clase para Random Forest",
+    )
+    parser.add_argument(
         "--cross-validate",
         action="store_true",
         help="Realizar cross-validation en lugar de train/test simple",
@@ -1362,6 +1405,10 @@ def main() -> int:
         "n_iter_optimize": args.n_iter_optimize,
         "cv_folds_optimize": args.cv_folds_optimize,
         "optimize_storage": args.optimize_storage,
+        "min_samples_split": args.min_samples_split,
+        "min_samples_leaf": args.min_samples_leaf,
+        "max_features": None if args.max_features == "none" else args.max_features,
+        "class_weight": args.class_weight,
     }
 
     # Agregar parámetros específicos de deep learning

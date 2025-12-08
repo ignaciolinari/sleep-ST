@@ -16,6 +16,7 @@ def train_random_forest(
     max_depth: Optional[int] = None,
     min_samples_split: int = 5,
     min_samples_leaf: int = 2,
+    max_features: Optional[str | int | float] = "sqrt",
     class_weight: Optional[str] = "balanced",
     random_state: int = 42,
     n_jobs: int = -1,
@@ -56,6 +57,7 @@ def train_random_forest(
     logging.info(f"  - Profundidad máxima: {max_depth if max_depth else 'Sin límite'}")
     logging.info(f"  - Mínimo muestras para split: {min_samples_split}")
     logging.info(f"  - Mínimo muestras en hoja: {min_samples_leaf}")
+    logging.info(f"  - Max features: {max_features}")
     logging.info(f"  - Pesos de clases: {class_weight}")
     logging.info(f"  - Jobs paralelos: {n_jobs}")
     logging.info("Datos de entrenamiento:")
@@ -69,6 +71,7 @@ def train_random_forest(
         max_depth=max_depth,
         min_samples_split=min_samples_split,
         min_samples_leaf=min_samples_leaf,
+        max_features=max_features,
         class_weight=class_weight,
         random_state=random_state,
         n_jobs=n_jobs,
