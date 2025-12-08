@@ -5,6 +5,7 @@ tanto para modelos de Machine Learning como Deep Learning.
 """
 
 import logging
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -46,6 +47,8 @@ def optimize_hyperparameters_bayesian(
     cv_folds: int = 3,
     timeout: Optional[int] = None,
     show_progress_bar: bool = True,
+    storage: Optional[str] = None,
+    study_name: Optional[str] = None,
 ) -> dict:
     """Optimiza hiperparámetros usando Optuna (optimización bayesiana).
 
@@ -94,6 +97,15 @@ def optimize_hyperparameters_bayesian(
     logging.info(f"Cross-validation folds: {cv_folds}")
     if timeout:
         logging.info(f"Timeout: {timeout} segundos")
+    # Configurar storage para reanudar estudios (SQLite por defecto si se pasa ruta)
+    resolved_storage = None
+    if storage:
+        if storage.startswith(("sqlite://", "postgresql://", "mysql://")):
+            resolved_storage = storage
+        else:
+            resolved_storage = f"sqlite:///{Path(storage).absolute()}"
+        logging.info(f"Usando storage de Optuna: {resolved_storage}")
+    study_name = study_name or f"{model_type}_optimization"
 
     # Crear cross-validator con subject-level splitting
     cv = SubjectTimeSeriesSplit(n_splits=cv_folds, test_size=0.2)
@@ -208,7 +220,9 @@ def optimize_hyperparameters_bayesian(
         direction="maximize",
         sampler=sampler,
         pruner=pruner,
-        study_name=f"{model_type}_optimization",
+        study_name=study_name,
+        storage=resolved_storage,
+        load_if_exists=resolved_storage is not None,
     )
 
     # Configurar logging de Optuna
@@ -259,6 +273,8 @@ def optimize_hyperparameters(
     groups_val: pd.Series,
     n_iter: int = 50,
     cv_folds: int = 3,
+    storage: Optional[str] = None,
+    study_name: Optional[str] = None,
 ) -> dict:
     """Optimiza hiperparámetros usando optimización bayesiana (Optuna).
 
@@ -303,6 +319,8 @@ def optimize_hyperparameters(
             groups_val=groups_val,
             n_trials=n_iter,
             cv_folds=cv_folds,
+            storage=storage,
+            study_name=study_name,
         )
 
     # Fallback: optimización manual básica si Optuna no está disponible

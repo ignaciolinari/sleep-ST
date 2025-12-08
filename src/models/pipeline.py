@@ -895,6 +895,7 @@ def run_training_pipeline(
                 "optimize",
                 "n_iter_optimize",
                 "cv_folds_optimize",
+                "optimize_storage",
             }
         }
         if model_type == "random_forest":
@@ -1002,9 +1003,13 @@ def run_training_pipeline(
                 groups_val=val_df["subject_core"],
                 n_iter=model_kwargs.pop("n_iter_optimize", 20),
                 cv_folds=model_kwargs.pop("cv_folds_optimize", 3),
+                storage=model_kwargs.get("optimize_storage"),
+                study_name=f"{model_type}_optimization",
             )
             # Actualizar model_kwargs con los mejores parámetros encontrados
             model_kwargs.update(opt_results["best_params"])
+            # Remover clave de storage para no pasarla al estimador
+            model_kwargs.pop("optimize_storage", None)
             logging.info("\n" + "=" * 60)
             logging.info(
                 "Usando mejores parámetros encontrados para entrenamiento final"
@@ -1326,6 +1331,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=3,
         help="Número de folds para cross-validation en optimización (default: 3)",
     )
+    parser.add_argument(
+        "--optimize-storage",
+        type=str,
+        default=None,
+        help="Storage de Optuna (p.ej. sqlite:///optuna_rf.db o ruta a .db) para reanudar estudios",
+    )
     return parser
 
 
@@ -1350,6 +1361,7 @@ def main() -> int:
         "optimize": args.optimize,
         "n_iter_optimize": args.n_iter_optimize,
         "cv_folds_optimize": args.cv_folds_optimize,
+        "optimize_storage": args.optimize_storage,
     }
 
     # Agregar parámetros específicos de deep learning
