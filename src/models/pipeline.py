@@ -1321,6 +1321,54 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[None, "balanced", "balanced_subsample"],
         help="Pesos de clase para Random Forest",
     )
+    # Parámetros específicos de XGBoost
+    parser.add_argument(
+        "--subsample",
+        type=float,
+        default=0.8,
+        help="Fracción de muestras para cada árbol (XGBoost)",
+    )
+    parser.add_argument(
+        "--colsample-bytree",
+        dest="colsample_bytree",
+        type=float,
+        default=0.8,
+        help="Fracción de features para cada árbol (XGBoost)",
+    )
+    parser.add_argument(
+        "--min-child-weight",
+        dest="min_child_weight",
+        type=float,
+        default=1.0,
+        help="Min child weight para XGBoost",
+    )
+    parser.add_argument(
+        "--gamma",
+        type=float,
+        default=0.0,
+        help="Gamma (mínima reducción de pérdida) para XGBoost",
+    )
+    parser.add_argument(
+        "--reg-alpha",
+        dest="reg_alpha",
+        type=float,
+        default=0.01,
+        help="Regularización L1 (alpha) para XGBoost",
+    )
+    parser.add_argument(
+        "--reg-lambda",
+        dest="reg_lambda",
+        type=float,
+        default=1.0,
+        help="Regularización L2 (lambda) para XGBoost",
+    )
+    parser.add_argument(
+        "--scale-pos-weight",
+        dest="scale_pos_weight",
+        type=float,
+        default=None,
+        help="Peso para clases positivas en XGBoost (opcional)",
+    )
     parser.add_argument(
         "--cross-validate",
         action="store_true",
@@ -1423,6 +1471,21 @@ def main() -> int:
                 "batch_size": args.batch_size,
                 "epochs": args.epochs,
                 "verbose": args.verbose,
+            }
+        )
+
+    # Parámetros específicos de XGBoost
+    if args.model_type == "xgboost":
+        model_kwargs.update(
+            {
+                "learning_rate": args.learning_rate,
+                "subsample": args.subsample,
+                "colsample_bytree": args.colsample_bytree,
+                "min_child_weight": args.min_child_weight,
+                "gamma": args.gamma,
+                "reg_alpha": args.reg_alpha,
+                "reg_lambda": args.reg_lambda,
+                "scale_pos_weight": args.scale_pos_weight,
             }
         )
 
