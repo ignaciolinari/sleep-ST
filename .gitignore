@@ -12,13 +12,11 @@ data/**
 *.npy
 *.npz
 *.mat
-*.csv
 *.tsv
 out/*
 !out/.gitkeep
 tmp/*
 !tmp/.gitkeep
-*.png
 *.jpg
 *.jpeg
 *.svg
@@ -69,6 +67,7 @@ build/
 # Modelos entrenados
 models/**/*.pkl
 checkpoints/
+*.keras
 
 # # Configuración personal
 # *.json
