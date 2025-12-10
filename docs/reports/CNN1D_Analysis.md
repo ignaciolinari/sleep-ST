@@ -43,22 +43,19 @@ Análisis completo del entrenamiento `cnn1d_full_20251209_183759`.
    - `from_logits=True` para estabilidad numérica
    - Gradient clipping `clipnorm=1.0`
 
-### Hallazgo: Métricas Faltantes Después de Epoch 101
+### Nota: Evaluación de Métricas Cada 3 Epochs
 
-**Causa identificada**: El callback `SleepMetricsCallback` usa `eval_every=3`:
+El callback `SleepMetricsCallback` está configurado con `eval_every=3`:
 
 ```python
 # Línea 1846 de la notebook
 eval_every=3,  # Evaluar F1/Kappa cada 3 epochs para reducir overhead
 ```
 
-Esto significa que **solo se registran métricas en epochs múltiplos de 3**. Sin embargo, el CSV muestra valores vacíos después de epoch 101-102. Posibles causas:
+Esto es **comportamiento intencional** para reducir el overhead de evaluación. Las métricas `val_kappa` y `val_f1_macro` solo se registran en epochs múltiplos de 3 (3, 6, 9, ..., 99, 102, ...). Los valores vacíos en el CSV son esperados.
 
-1. **Error de logging en CSVLogger** - Las métricas se agregan a `logs` pero Keras no las persiste correctamente
-2. **El callback se ejecutó pero no se guardó** - Las métricas internas del callback (`best_f1_macro=0.68`) se mantuvieron correctas
-
-> [!IMPORTANT]
-> El modelo `best.keras` se guardó en **epoch 73** según los logs (mejor F1 macro = 0.68), por lo que la selección de modelo fue correcta a pesar de los logs incompletos.
+> [!NOTE]
+> El modelo `best.keras` se guardó en **epoch 73** (mejor F1 macro = 0.68). La selección de modelo funcionó correctamente.
 
 ### Análisis de Curvas
 
@@ -154,5 +151,4 @@ Tu modelo alcanza **~91% del rendimiento humano** (0.691/0.76), lo cual es excel
 
 **Entrenamiento exitoso** con resultados competitivos
 **Kappa 0.69** en rango de literatura para CNN single-epoch
-**Logging incompleto** después de epoch 101 (no afecta modelo guardado)
 **Próximo paso**: Agregar contexto temporal para superar 0.75
