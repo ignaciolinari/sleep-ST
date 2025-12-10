@@ -94,7 +94,7 @@ Basado en distribución típica de Sleep-EDF:
 
 | Modelo | Dataset | Kappa | Contexto |
 |--------|---------|-------|----------|
-| **Tu CNN1D** | Sleep-EDF (30 suj) | **0.691** | Single-epoch |
+| **Tu CNN1D** | Sleep-EDF (78 suj) | **0.691** | Single-epoch |
 | DeepSleepNet | Sleep-EDF | ~0.76 | Secuencias |
 | SleepTransformer | Sleep-EDF | ~0.79 | Attention |
 | Inter-scorer humano | - | 0.75-0.85 | Gold standard |
