@@ -1,0 +1,80 @@
+{
+  "model_name": "lstm_full_20251210_193039",
+  "config": {
+    "execution_mode": "full",
+    "manifest_path": "/kaggle/input/sleep-edf-trimmed-f32/manifest_trimmed_spt.csv",
+    "epoch_length": 30.0,
+    "sfreq": 100,
+    "debug_max_subjects": 30,
+    "limit_sessions": null,
+    "test_size": 0.15,
+    "val_size": 0.15,
+    "random_state": 42,
+    "lstm_units": 96,
+    "dropout_rate": 0.3,
+    "bidirectional": false,
+    "use_attention": false,
+    "learning_rate_initial": 0.0004,
+    "learning_rate_min": 1e-06,
+    "warmup_epochs": 5,
+    "batch_size": 80,
+    "epochs": 300,
+    "use_class_weights": true,
+    "class_weight_clip": 1.5,
+    "std_epsilon": 1e-06,
+    "clip_value": 5.0,
+    "early_stopping_patience": 40,
+    "use_mixed_precision": false,
+    "run_optimization": false,
+    "n_optuna_trials": 30,
+    "streaming": true,
+    "tfrecord_dir": "/kaggle/working/tfrecords_lstm",
+    "shuffle_buffer": 5000,
+    "effective_batch_size": 160
+  },
+  "metrics": {
+    "accuracy": 0.6616623947272061,
+    "kappa": 0.5295576706592695,
+    "f1_macro": 0.5858926923000884,
+    "f1_weighted": 0.6585101384711184
+  },
+  "training": {
+    "training_time_seconds": 12144.898797988892,
+    "training_time_minutes": 202.41497996648152,
+    "epochs_trained": 300,
+    "best_val_f1_macro": 0.5786321015984122,
+    "best_val_kappa": 0.48457635019891887
+  },
+  "dataset": {
+    "train_samples": 133504,
+    "val_samples": 22954,
+    "test_samples": 30041,
+    "tfrecord_paths": {
+      "train": "/kaggle/working/tfrecords_lstm/train.tfrecord",
+      "val": "/kaggle/working/tfrecords_lstm/val.tfrecord",
+      "test": "/kaggle/working/tfrecords_lstm/test.tfrecord"
+    },
+    "execution_mode": "full"
+  },
+  "channel_stats": {
+    "mean": [
+      5.649307865951414e-08,
+      -2.690551337281022e-09,
+      -1.9447659269644646e-06,
+      2.337350224479451e-06
+    ],
+    "std": [
+      0.0010002036578953266,
+      0.001000062096863985,
+      0.0010010611731559038,
+      0.0010000019101426005
+    ]
+  },
+  "label_encoder_classes": [
+    "W",
+    "N1",
+    "N2",
+    "N3",
+    "REM"
+  ]
+}
