@@ -78,7 +78,7 @@ Las columnas `val_kappa` y `val_f1_macro` quedan vacías después del epoch 101.
 |--------|--------------|-------|----------|----------|-----|
 | **LSTM Unidireccional** | 96 units, no attn | **0.530** | **58.6%** | Single-epoch | Real-time |
 | CNN1D Baseline | 3 bloques residuales | 0.691 | 71.0% | Single-epoch | Offline |
-| Bi-LSTM (pendiente) | Bidireccional | TBD | TBD | Single-epoch | Offline |
+| Bi-LSTM | Bidireccional | 0.521 | 58.2% | Single-epoch | Offline |
 | Bi-LSTM + Attention (pendiente) | Bidireccional + Attn | TBD | TBD | Single-epoch | Offline |
 | DeepSleepNet | CNN + BiLSTM | ~0.76 | - | Secuencias | Offline |
 | Inter-scorer humano | - | 0.75-0.85 | - | - | Gold standard |
