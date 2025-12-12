@@ -7,15 +7,16 @@
 
 ## 1. Resumen Ejecutivo
 
-Se extrajeron **139 features** de **186,499 epochs** (30s cada uno) correspondientes a **153 sujetos** del dataset Sleep-EDF. El proceso incluyó corrección de un bug crítico en el preprocesamiento y validación científica de los resultados.
+Se extrajeron **133 features** de **186,499 epochs** (30s cada uno) correspondientes a **78 sujetos** (153 sesiones/noches) del dataset Sleep-EDF. El proceso incluyó corrección de un bug crítico en el preprocesamiento y validación científica de los resultados.
 
 | Métrica | Valor |
 |---------|-------|
 | Archivo de salida | `features_resamp200.parquet` |
 | Tamaño | 176 MB |
 | Total epochs | 186,499 |
-| Total sujetos | 153 |
-| Total features | 139 |
+| Total sujetos | 78 |
+| Total sesiones/noches | 153 |
+| Total features | 133 |
 | Valores NaN | 0.00% |
 
 ---
@@ -131,7 +132,7 @@ CHANNEL_TYPE_MAPPING = {
 
 ---
 
-## 5. Features Extraídas (139 total)
+## 5. Features Extraídas (133 total)
 
 ### 5.1 Por Canal
 
@@ -175,12 +176,18 @@ CHANNEL_TYPE_MAPPING = {
 
 ---
 
-## 7. Próximos Pasos
+## 7. Resultados del Modelado
 
-1. **Análisis exploratorio:** Visualizar distribución de features por estadio
-2. **Selección de features:** Identificar features más discriminativas
-3. **Entrenamiento de modelos:** Random Forest, XGBoost, CNN, LSTM
-4. **Validación cruzada:** Leave-one-subject-out (LOSO)
+Los features extraídos fueron utilizados para entrenar modelos de **Machine Learning clásico**:
+
+| Modelo | Cohen's Kappa | F1 Macro | Uso |
+|--------|---------------|----------|-----|
+| **XGBoost LOSO** | **0.641** | 70.02% | ML interpretable (elegido) |
+| Random Forest | 0.635 | 69.50% | Baseline |
+
+> **Nota:** Los modelos de Deep Learning (CNN1D, LSTM) trabajan directamente sobre la señal cruda, sin usar estas features.
+>
+> **Ver análisis completo:** [docs/reports/COMPARATIVE_ANALYSIS.md](../../docs/reports/COMPARATIVE_ANALYSIS.md)
 
 ---
 

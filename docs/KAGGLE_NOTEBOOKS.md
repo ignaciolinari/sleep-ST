@@ -14,21 +14,19 @@ Antes de ejecutar los notebooks, debes subir los datos procesados a Kaggle como 
 
 ### Estructura del Dataset
 
-Usa el dataset de Kaggle `sleep-edf-trimmed-200hz-f32-v2` (https://www.kaggle.com/datasets/ignaciolinari/sleep-edf-trimmed-200hz-f32-v2), que ya contiene los archivos remuestreados a 200 Hz en float32:
+Usa el dataset de Kaggle `sleep-edf-trimmed-f32` (https://www.kaggle.com/datasets/ignaciolinari/sleep-edf-trimmed-f32), que contiene los archivos preprocesados a **100 Hz** en float32:
 
 ```
-sleep-edf-trimmed-200hz-f32-v2/
-├── manifest_trimmed_resamp200.csv
-└── sleep_trimmed_resamp200/
+sleep-edf-trimmed-f32/
+├── manifest_trimmed_spt.csv
+└── sleep_trimmed_spt/
     ├── psg/
     │   ├── SC4001E_sleep-cassette_1.0.0_trimmed_raw.fif
     │   ├── SC4002E_sleep-cassette_1.0.0_trimmed_raw.fif
-    │   ├── SC4011E_sleep-cassette_1.0.0_trimmed_raw.fif
     │   └── ... (todos los archivos .fif)
     └── hypnograms/
         ├── SC4001E_sleep-cassette_1.0.0_trimmed_annotations.csv
         ├── SC4002E_sleep-cassette_1.0.0_trimmed_annotations.csv
-        ├── SC4011E_sleep-cassette_1.0.0_trimmed_annotations.csv
         └── ... (todos los archivos de anotaciones)
 ```
 
@@ -36,20 +34,20 @@ sleep-edf-trimmed-200hz-f32-v2/
 
 | Carpeta | Contenido | Descripcion |
 |---------|-----------|-------------|
-| `manifest_trimmed_resamp200.csv` | Archivo raiz | Mapeo de sujetos a archivos PSG y hypnogramas |
-| `sleep_trimmed_resamp200/psg/` | Archivos `.fif` | Datos de polisomnografia (senales EEG, EOG, EMG) |
-| `sleep_trimmed_resamp200/hypnograms/` | Archivos `.csv` | Anotaciones de etapas del sueno por epoca |
+| `manifest_trimmed_spt.csv` | Archivo raiz | Mapeo de sujetos a archivos PSG y hypnogramas |
+| `sleep_trimmed_spt/psg/` | Archivos `.fif` | Datos de polisomnografia (senales EEG, EOG, EMG) |
+| `sleep_trimmed_spt/hypnograms/` | Archivos `.csv` | Anotaciones de etapas del sueno por epoca |
 
-> Si usas la version 100 Hz (sin remuestreo), el manifest y carpetas se llaman `manifest_trimmed_spt.csv` y `sleep_trimmed_spt/`.
+> **Nota:** Los notebooks usan 100 Hz por defecto (`sfreq=100`) para evitar problemas de memoria en Kaggle. Si usas la versión 200 Hz, el manifest y carpetas se llaman `manifest_trimmed_resamp200.csv` y `sleep_trimmed_resamp200/`.
 
 ### Pasos para Subir
 
 1. Ir a [kaggle.com/datasets](https://www.kaggle.com/datasets)
 2. Click en "New Dataset" (o "New Version" si ya existe)
-3. Nombrar el dataset: `sleep-edf-trimmed-200hz-f32-v2` (mantén el mismo slug para versionar)
-4. Subir el contenido de `data/processed/` correspondiente al remuestreo 200 Hz:
-   - `manifest_trimmed_resamp200.csv`
-   - Carpeta `sleep_trimmed_resamp200/` completa (`psg/` y `hypnograms/`)
+3. Nombrar el dataset: `sleep-edf-trimmed-f32`
+4. Subir el contenido de `data/processed/` correspondiente:
+   - `manifest_trimmed_spt.csv`
+   - Carpeta `sleep_trimmed_spt/` completa (`psg/` y `hypnograms/`)
 5. Publicar el dataset (puede ser privado)
 
 ## Notebooks Disponibles
@@ -200,6 +198,21 @@ Despues de ejecutar los notebooks, tendras:
 ├── lstm_best_optuna.keras        # Mejor modelo LSTM optimizado
 └── optuna_history_*.csv          # Historial de optimizacion
 ```
+
+## Resultados Obtenidos
+
+Los modelos entrenados en Kaggle lograron los siguientes resultados:
+
+| Modelo | Cohen's Kappa | F1 Macro | Accuracy | Tiempo |
+|--------|---------------|----------|----------|--------|
+| **CNN1D** | **0.680** | 70.83% | 76.86% | ~105 min |
+| LSTM Bi + Attention | 0.651 | 68.07% | 74.64% | ~200 min |
+| LSTM Bidireccional | 0.521 | 58.18% | 65.41% | ~372 min |
+| LSTM Unidireccional | 0.530 | 58.59% | 66.17% | ~202 min |
+
+> **Hallazgo clave:** CNN1D supera a todas las variantes LSTM para clasificación single-epoch, y es ~4x más eficiente en tiempo de entrenamiento.
+
+Ver [Análisis Comparativo](reports/COMPARATIVE_ANALYSIS.md) para detalles completos.
 
 ## Referencias
 

@@ -10,6 +10,7 @@ data/**
 # Allow light data docs/manifests to be versioned
 !data/processed/README.md
 !data/processed/FEATURE_EXTRACTION_REPORT.md
+!data/processed/FEATURE_EXTRACTION_REPORT_COMPLETE.md
 !data/processed/manifest*.csv
 *.edf
 *.hyp

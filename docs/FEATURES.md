@@ -4,13 +4,18 @@ Este documento describe todas las features que se extraen para cada epoch de 30 
 
 ## Resumen
 
-Para cada epoch se extraen aproximadamente **~130-150 features** distribuidas en:
+Para cada epoch se extraen **133 features** distribuidas en:
 
 - **Features espectrales** (por canal): Potencia en bandas de frecuencia
 - **Features temporales** (por canal): Estadísticas, entropía y parámetros temporales
 - **Features de spindles** (canales EEG): Detección y características de spindles
 - **Features de ondas lentas** (canales EEG): Características de slow waves
 - **Features entre canales**: Correlaciones, ratios y coherencia
+
+> [!TIP]
+> Para documentación técnica detallada sobre procesamiento de señales, FFT, y teoría detrás de cada feature, ver:
+> - [Informe Resumido](../data/processed/FEATURE_EXTRACTION_REPORT.md)
+> - [Informe Completo](../data/processed/FEATURE_EXTRACTION_REPORT_COMPLETE.md) (incluye fundamentos teóricos de Fourier, Welch, filtros FIR, etc.)
 
 ---
 
@@ -48,7 +53,7 @@ Para cada canal (EEG Fpz-Cz, EEG Pz-Oz, EOG horizontal, EMG submental):
 
 - `{canal}_dominant_freq`: Frecuencia con mayor potencia espectral (0.5-45 Hz)
 
-**Total por canal:** ~15 features espectrales × 4 canales = **~60 features**
+**Total por canal:** 16 features espectrales × 4 canales = **64 features**
 
 ---
 
@@ -82,7 +87,9 @@ Para cada canal:
 
 - `{canal}_zcr`: Tasa de cruces por cero (frecuencia aproximada)
 
-**Total por canal:** ~12 features temporales × 4 canales = **~48 features**
+**Total por canal:** 12 features temporales × 4 canales = **48 features**
+
+> **Nota:** Los canales EEG también tienen features de spindles y slow waves (ver secciones siguientes), por lo que el total por canal EEG es mayor.
 
 ---
 
@@ -145,7 +152,7 @@ Para cada canal EEG:
 
 > **Nota:** La coherencia ahora se calcula correctamente usando `scipy.signal.coherence` (antes usaba un cálculo manual aproximado).
 
-**Total:** **~7 features entre canales**
+**Total:** **7 features entre canales**
 
 ---
 
@@ -163,12 +170,23 @@ Para cada canal EEG:
 
 ## Total de Features para el Modelo
 
-**Aproximadamente 129 features** por epoch:
-- ~60 features espectrales (15 × 4 canales)
-- ~48 features temporales (12 × 4 canales, incluyendo entropía espectral)
-- ~8 features de spindles (4 × 2 canales EEG)
-- ~6 features de ondas lentas (3 × 2 canales EEG)
-- ~7 features entre canales
+**133 features** por epoch:
+
+| Categoría | Features por canal | Canales | Total |
+|-----------|-------------------|---------|-------|
+| Espectrales | 16 | 4 | 64 |
+| Temporales + Hjorth + Entropías | 12 | 4 | 48 (pero ver nota) |
+| Spindles | 4 | 2 (EEG) | 8 |
+| Ondas lentas | 3 | 2 (EEG) | 6 |
+| Cross-channel | - | - | 7 |
+
+**Desglose real verificado:**
+- EEG Fpz-Cz: 35 features
+- EEG Pz-Oz: 35 features
+- EOG horizontal: 28 features
+- EMG submental: 28 features
+- Cross-channel: 7 features
+- **Total: 133 features**
 
 ---
 

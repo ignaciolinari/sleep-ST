@@ -27,6 +27,11 @@ data/processed/sleep_trimmed/
 features.parquet (~130 features por epoch)
 ```
 
+> [!NOTE]
+> **Frecuencias de muestreo**:
+> - **100 Hz**: Usado para entrenamiento en Kaggle (menor uso de memoria). Ver [KAGGLE_NOTEBOOKS.md](KAGGLE_NOTEBOOKS.md).
+> - **200 Hz**: Usado para extracción de features localmente (mayor resolución espectral en gamma). Ver [FEATURES.md](FEATURES.md).
+
 ## Preprocesamiento: Recorte alrededor del sueño
 
 Las grabaciones originales incluyen horas de vigilia (ej: antes de dormir). El preprocesamiento recorta cada sesión al **Sleep Period Time (SPT)** con márgenes configurables.

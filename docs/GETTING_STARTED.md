@@ -17,12 +17,6 @@ conda env create -f environment.yml
 conda activate sleep-st
 ```
 
-### Opción B: pip
-
-```bash
-pip install -r requirements.txt
-```
-
 > **Nota**: El archivo `environment.yml` incluye todas las dependencias necesarias, incluyendo TensorFlow para modelos de deep learning.
 
 ## Descargar el Dataset

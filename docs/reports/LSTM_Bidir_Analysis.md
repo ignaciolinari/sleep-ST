@@ -49,7 +49,7 @@ Análisis completo del entrenamiento `lstm_full_20251211_031820`.
 
 1. **Sin mejora vs unidireccional**: Kappa 0.521 vs 0.530 del unidireccional (-1.7%)
 2. **Tiempo de entrenamiento casi duplicado**: 372 min vs 202 min (+84%)
-3. **Métricas más bajas que CNN1D**: Kappa 0.52 vs 0.69 del CNN1D baseline
+3. **Métricas más bajas que CNN1D**: Kappa 0.52 vs 0.68 del CNN1D baseline
 4. **Mejor epoch muy temprano**: Epoch 74 fue el mejor, pero el modelo se guardó correctamente
 
 ### Análisis de Curvas
@@ -75,8 +75,8 @@ Análisis completo del entrenamiento `lstm_full_20251211_031820`.
 |--------|--------------|-------|----------|--------|-----|
 | LSTM Unidireccional | 96 units, no attn | 0.530 | 58.6% | 202 min | Real-time |
 | **LSTM Bidireccional** | **96×2 units, no attn** | **0.521** | **58.2%** | **372 min** | **Offline** |
-| CNN1D Baseline | 3 bloques residuales | 0.691 | 71.0% | 106 min | Offline |
-| Bi-LSTM + Attention (pendiente) | Bidireccional + Attn | TBD | TBD | TBD | Offline |
+| CNN1D Baseline | 3 bloques residuales | 0.680 | 70.83% | 105 min | Offline |
+| Bi-LSTM + Attention | Bidireccional + Attn | 0.651 | 68.1% | 200 min | Offline |
 | DeepSleepNet | CNN + BiLSTM | ~0.76 | - | - | Offline |
 | Inter-scorer humano | - | 0.75-0.85 | - | - | Gold standard |
 
@@ -163,7 +163,7 @@ Análisis completo del entrenamiento `lstm_full_20251211_031820`.
 ### Recomendación Conservadora
 
 3. **Usar CNN1D como baseline principal**:
-   - Mejor Kappa (0.69 vs 0.52)
+   - Mejor Kappa (0.68 vs 0.52)
    - Más rápido (106 min vs 372 min)
    - Más simple de desplegar
 

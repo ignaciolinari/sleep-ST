@@ -48,13 +48,15 @@
 
 ## Rendimiento por Clase (F1-Score)
 
-| Clase | CNN1D | LSTM+Attn | XGBoost | RF | Promedio |
-|-------|-------|-----------|---------|-----|----------|
-| **Wake (W)** | ~0.80 | ~0.85 | 88.14% | 88.13% | ~86% |
-| **N1** | ~0.40 | ~0.45 | 40.76% | 39.77% | ~41% |
-| **N2** | ~0.85 | ~0.80 | 74.65% | 74.44% | ~78% |
-| **N3** | ~0.75 | ~0.75 | 76.25% | 75.80% | ~76% |
-| **REM** | ~0.75 | ~0.70 | 70.28% | 69.34% | ~71% |
+| Clase | CNN1D* | LSTM+Attn* | XGBoost | RF | Promedio |
+|-------|--------|------------|---------|-----|----------|
+| **Wake (W)** | ~80% | ~85% | 88.14% | 88.13% | ~86% |
+| **N1** | ~40% | ~45% | 40.76% | 39.77% | ~41% |
+| **N2** | ~85% | ~80% | 74.65% | 74.44% | ~78% |
+| **N3** | ~75% | ~75% | 76.25% | 75.80% | ~76% |
+| **REM** | ~75% | ~70% | 70.28% | 69.34% | ~71% |
+
+*\*CNN1D y LSTM+Attn: valores estimados de matrices de confusión. Ver reportes individuales para detalles.*
 
 > [!WARNING]
 > **N1 es consistentemente la clase más difícil** en todos los modelos (F1 ~40%). Esto es esperado dada su naturaleza transicional y baja representación.

@@ -46,7 +46,7 @@ Análisis completo del entrenamiento `lstm_full_20251210_193039`.
 ### Aspectos a Mejorar
 
 1. **Gap train-val significativo**: Val accuracy ~77% pero Test accuracy ~66%, indica posible distributional shift
-2. **Métricas más bajas que CNN1D**: Kappa 0.53 vs 0.69 del CNN1D baseline
+2. **Métricas más bajas que CNN1D**: Kappa 0.53 vs 0.68 del CNN1D baseline
 3. **Sin mecanismo de atención**: Dificulta capturar dependencias temporales largas
 4. **Información temporal local**: Una epoch (30s) aislada vs secuencias
 
@@ -77,9 +77,9 @@ Las columnas `val_kappa` y `val_f1_macro` quedan vacías después del epoch 101.
 | Modelo | Arquitectura | Kappa | F1 Macro | Contexto | Uso |
 |--------|--------------|-------|----------|----------|-----|
 | **LSTM Unidireccional** | 96 units, no attn | **0.530** | **58.6%** | Single-epoch | Real-time |
-| CNN1D Baseline | 3 bloques residuales | 0.691 | 71.0% | Single-epoch | Offline |
+| CNN1D Baseline | 3 bloques residuales | 0.680 | 70.83% | Single-epoch | Offline |
 | Bi-LSTM | Bidireccional | 0.521 | 58.2% | Single-epoch | Offline |
-| Bi-LSTM + Attention (pendiente) | Bidireccional + Attn | TBD | TBD | Single-epoch | Offline |
+| Bi-LSTM + Attention | Bidireccional + Attn | 0.651 | 68.1% | Single-epoch | Offline |
 | DeepSleepNet | CNN + BiLSTM | ~0.76 | - | Secuencias | Offline |
 | Inter-scorer humano | - | 0.75-0.85 | - | - | Gold standard |
 
@@ -92,10 +92,10 @@ Las columnas `val_kappa` y `val_f1_macro` quedan vacías después del epoch 101.
 
 | Aspecto | LSTM Unidireccional | CNN1D |
 |---------|---------------------|-------|
-| **Kappa** | 0.530 | **0.691** (+30%) |
-| **F1 Macro** | 58.6% | **71.0%** (+21%) |
-| **Accuracy** | 66.2% | **77.9%** (+18%) |
-| **Tiempo entrenamiento** | 202 min | **106 min** (2x más rápido) |
+| **Kappa** | 0.530 | **0.680** (+28%) |
+| **F1 Macro** | 58.6% | **70.83%** (+21%) |
+| **Accuracy** | 66.2% | **76.86%** (+16%) |
+| **Tiempo entrenamiento** | 202 min | **105 min** (1.9x más rápido) |
 | **Parámetros** | ~96K | ~100K (similar) |
 | **Uso real-time** | **Ideal** | Posible |
 | **Contexto temporal** | Secuencial | Local (kernel) |

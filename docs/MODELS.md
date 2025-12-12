@@ -4,12 +4,19 @@ Documentación completa sobre entrenamiento de modelos, estrategias de split, cr
 
 ## Modelos disponibles
 
-| Modelo | Tipo | Input | Descripción |
-|--------|------|-------|-------------|
-| Random Forest | ML | Features | Ensemble de árboles, robusto y rápido |
-| XGBoost | ML | Features | Gradient boosting con regularización |
-| CNN1D | DL | Señales raw | Red convolucional con bloques residuales |
-| BiLSTM | DL | Secuencias de features | LSTM bidireccional con atención |
+| Modelo | Tipo | Input | Descripción | Kappa |
+|--------|------|-------|-------------|-------|
+| Random Forest | ML | Features | Ensemble de árboles, robusto y rápido | 0.635 |
+| **XGBoost** | ML | Features | Gradient boosting con LOSO (elegido) | **0.641** |
+| **CNN1D** | DL | Señales raw | Red convolucional con bloques residuales | **0.680** |
+| LSTM Unidir | DL | Señales raw | LSTM unidireccional (real-time) | 0.530 |
+| LSTM Bidir | DL | Señales raw | LSTM bidireccional | 0.521 |
+| LSTM Bi+Attn | DL | Señales raw | LSTM bidireccional con atención | 0.651 |
+
+> **Recomendaciones:**
+> - **Mejor rendimiento**: CNN1D (κ=0.680)
+> - **ML interpretable + LOSO**: XGBoost (κ=0.641)
+> - **Inferencia real-time**: LSTM Unidireccional (κ=0.530)
 
 ## Workflow recomendado
 
@@ -225,10 +232,10 @@ python -m src.models \
 
 ### Consideraciones para LSTM
 
-- Input: secuencias de features `(n_sequences, sequence_length, n_features)`
-- `sequence_length`: epochs consecutivos (default: 5 ≈ 2.5 min)
-- Normalización con StandardScaler guardada en el modelo
-- Arquitectura bidireccional
+- Input: señales raw por epoch `(n_epochs, n_samples, n_channels)` - clasificación single-epoch
+- Normalización por canal guardada en el modelo
+- Variantes entrenadas: unidireccional, bidireccional, bidireccional + atención
+- **Nota:** No se usan secuencias de epochs consecutivos; cada epoch se clasifica independientemente
 
 ### Normalización
 
@@ -271,6 +278,20 @@ models/
 | Evaluar generalización | LOSO + strict-class-coverage |
 | Señales raw | CNN1D |
 | Contexto temporal | LSTM con sequence_length 5-10 |
+
+## Resultados Obtenidos
+
+Ver [Análisis Comparativo](reports/COMPARATIVE_ANALYSIS.md) para detalles completos.
+
+| Modelo | Cohen's Kappa | F1 Macro | Accuracy |
+|--------|---------------|----------|----------|
+| **CNN1D** | **0.680** | 70.83% | 76.86% |
+| LSTM Bi+Attn | 0.651 | 68.07% | 74.64% |
+| **XGBoost LOSO** | **0.641** | 70.02% | 73.08% |
+| Random Forest | 0.635 | 69.50% | 72.82% |
+| LSTM Unidir | 0.530 | 58.59% | 66.17% |
+
+> **N1 es la clase más difícil** (F1 ~40%) en todos los modelos, debido a su naturaleza transicional.
 
 ## Siguiente paso
 

@@ -45,7 +45,7 @@ Análisis completo del entrenamiento `lstm_full_20251211_145034`.
 
 ### Aspectos a Mejorar
 
-1. **Brecha con CNN1D**: Kappa 0.65 vs 0.69 del CNN1D (-5.8%)
+1. **Brecha con CNN1D**: Kappa 0.65 vs 0.68 del CNN1D (-4.5%)
 2. **Early stopping no activado**: El modelo pudo beneficiarse de más epochs
 3. **No apto para real-time**: La bidireccionalidad requiere señal completa
 
@@ -74,7 +74,7 @@ Análisis completo del entrenamiento `lstm_full_20251211_145034`.
 | LSTM Unidireccional | 96 units, no attn | 0.530 | 58.6% | 202 min (300 ep) | Real-time |
 | LSTM Bidireccional | 96×2 units, no attn | 0.521 | 58.2% | 372 min (300 ep) | Offline |
 | **LSTM Bi + Attention** | **96×2 units + attn** | **0.651** | **68.1%** | 200 min (150 ep) | **Offline** |
-| CNN1D Baseline | 3 bloques residuales | 0.691 | 71.0% | 106 min | Offline |
+| CNN1D Baseline | 3 bloques residuales | 0.680 | 70.83% | 105 min | Offline |
 | DeepSleepNet | CNN + BiLSTM | ~0.76 | - | - | Offline |
 | Inter-scorer humano | - | 0.75-0.85 | - | - | Gold standard |
 
@@ -105,9 +105,9 @@ Análisis completo del entrenamiento `lstm_full_20251211_145034`.
 
 | Aspecto | LSTM Bi + Attention | CNN1D |
 |---------|---------------------|-------|
-| **Kappa** | 0.651 | **0.691** (+6.1%) |
-| **F1 Macro** | 68.1% | **71.0%** (+4.3%) |
-| **Accuracy** | 74.6% | **77.9%** (+4.4%) |
+| **Kappa** | 0.651 | **0.680** (+4.5%) |
+| **F1 Macro** | 68.1% | **70.83%** (+4.0%) |
+| **Accuracy** | 74.6% | **76.86%** (+3.0%) |
 | **Tiempo entrenamiento** | 200 min | **106 min** (1.9x más rápido) |
 | **Contexto temporal** | Secuencial + Atención | Local (kernel) |
 | **Interpretabilidad** | **Pesos de atención** | Feature maps |
