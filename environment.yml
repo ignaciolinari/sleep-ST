@@ -8,6 +8,7 @@ dependencies:
   - scipy
   - pandas
   - scikit-learn
+  - shap  # Interpretabilidad (TreeExplainer/plots)
   # EEG / PhysioNet
   - mne-base
   - wfdb
