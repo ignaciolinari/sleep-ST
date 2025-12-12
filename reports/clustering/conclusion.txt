@@ -1,0 +1,26 @@
+
+Se aplicó clustering jerárquico (Ward) a los 78 sujetos del dataset Sleep-EDF,
+representados por 133 features promediadas.
+
+HALLAZGOS:
+
+1. El Gap statistic sugiere K=1 como óptimo, indicando ausencia de clusters
+   naturales en los datos.
+
+2. Aunque K=2 produce un silhouette score significativamente mayor que el
+   esperado por azar (0.41, p<0.001), la distribución resultante (3 vs 75
+   sujetos) representa detección de outliers más que identificación de
+   subpoblaciones.
+
+3. Para K≥3, el silhouette score cae a ~0.10-0.13, indicando ausencia de
+   estructura de clustering significativa.
+
+INTERPRETACIÓN:
+
+Los sujetos del dataset Sleep-EDF forman un ESPECTRO CONTINUO en el espacio
+de features, sin subgrupos discretos claramente identificables. La variabilidad
+observada entre sujetos es gradual, no categórica.
+
+Esto es consistente con la literatura de medicina del sueño, donde las
+diferencias individuales en arquitectura del sueño típicamente varían de
+forma continua en la población general (no clínica).

@@ -1,0 +1,13 @@
+{
+  "n_subjects": 78,
+  "n_features": 133,
+  "hopkins_statistic": 0.7494750896554967,
+  "gap_optimal_k": 1,
+  "silhouette_k2": 0.4140232744275768,
+  "permutation_pvalue": 0.0,
+  "cluster_distribution_k2": [
+    3,
+    75
+  ],
+  "conclusion": "No se identificaron subpoblaciones discretas. Los sujetos forman un espectro continuo."
+}

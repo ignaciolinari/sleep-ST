@@ -66,6 +66,7 @@ python -m src.models --features-file data/processed/features.parquet --model-typ
 
 - [03_model_results.ipynb](notebooks/03_model_results.ipynb): Comparación de métricas y visualizaciones
 - [04_feature_analysis.ipynb](notebooks/04_feature_analysis.ipynb): SHAP, feature importance e interpretabilidad
+- [05_subject_clustering.ipynb](notebooks/05_subject_clustering.ipynb): Análisis de clustering de sujetos (resultado: espectro continuo)
 
 ## Estructura del proyecto
 
@@ -91,11 +92,27 @@ artifacts/                Modelos entrenados, métricas y visualizaciones
 
 ## Dataset
 
-[Sleep-EDF Database Expanded](https://physionet.org/content/sleep-edfx/1.0.0/) de PhysioNet:
-- **78 sujetos** (153 sesiones/noches)
-- **186,499 epochs** de 30 segundos
-- Canales: 2 EEG (Fpz-Cz, Pz-Oz), 1 EOG, 1 EMG
-- Hipnogramas anotados manualmente
+Este proyecto utiliza el subset **Sleep-Cassette** del [Sleep-EDF Database Expanded](https://physionet.org/content/sleep-edfx/1.0.0/) de PhysioNet.
+
+> [!NOTE]
+> El dataset completo Sleep-EDF contiene 197 grabaciones divididas en dos estudios:
+> - **Sleep-Cassette (SC)**: 78 sujetos, 153 noches - estudio de efectos de la edad en el sueño (1987-1991)
+> - **Sleep-Telemetry (ST)**: 22 sujetos, 44 noches - estudio de efectos del temazepam (1994)
+>
+> **Este proyecto usa únicamente Sleep-Cassette.**
+
+### Sleep-Cassette (SC)
+
+| Métrica | Valor |
+|---------|-------|
+| **Sujetos totales** | 78 |
+| **Sujetos con 2 noches** | 75 |
+| **Sujetos con 1 noche** | 3 (SC4131, SC4362, SC4522)* |
+| **Sesiones totales** | 153 |
+| **Epochs (30s)** | 186,499 |
+| **Canales** | 2 EEG (Fpz-Cz, Pz-Oz), 1 EOG, 1 EMG |
+
+\* Las noches faltantes se perdieron por fallos en el cassette o laserdisk durante el estudio original.
 
 ## Validación
 
