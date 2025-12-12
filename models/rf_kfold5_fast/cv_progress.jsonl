@@ -1,5 +1,0 @@
-{"fold": 0, "train_size": 152426, "test_size": 34073, "score": 0.6795953715665984}
-{"fold": 1, "train_size": 146566, "test_size": 39933, "score": 0.7186684487991883}
-{"fold": 2, "train_size": 152989, "test_size": 33510, "score": 0.6854896547968217}
-{"fold": 3, "train_size": 150735, "test_size": 35764, "score": 0.7055639729791137}
-{"fold": 4, "train_size": 150013, "test_size": 36486, "score": 0.7243118237799878}
